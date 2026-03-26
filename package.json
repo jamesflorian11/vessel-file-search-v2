@@ -1,0 +1,5 @@
+{
+  "name": "vessel-file-search-monorepo",
+  "private": true,
+  "workspaces": ["apps/desktop"]
+}
