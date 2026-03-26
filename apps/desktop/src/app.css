@@ -1,4 +1,5 @@
-:root {
+:root,
+[data-theme="dark"] {
   color-scheme: dark;
   --bg: #0f1115;
   --bg-elevated: #161a22;
@@ -12,6 +13,22 @@
   --radius: 10px;
   --font: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --titlebar-logo-bg: #1c2230;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f0f2f7;
+  --bg-elevated: #ffffff;
+  --border: #d5dae6;
+  --text: #141820;
+  --text-muted: #5a6278;
+  --accent: #2d62d8;
+  --accent-muted: #2454c4;
+  --danger: #c53030;
+  --success: #1d7a42;
+  --shadow: 0 8px 24px rgba(15, 20, 35, 0.08);
+  --titlebar-logo-bg: #e8ecf5;
 }
 
 * {

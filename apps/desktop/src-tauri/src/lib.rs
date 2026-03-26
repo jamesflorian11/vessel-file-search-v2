@@ -9,6 +9,9 @@ mod roots;
 mod scan;
 mod search;
 
+#[cfg(windows)]
+mod windows_explorer;
+
 use std::sync::Arc;
 
 use commands::{
@@ -26,6 +29,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.maximize();
+            }
             let app_data = app
                 .path()
                 .app_data_dir()

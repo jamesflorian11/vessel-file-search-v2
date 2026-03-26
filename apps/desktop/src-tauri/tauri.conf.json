@@ -17,12 +17,18 @@
         "title": "Vessel File Search",
         "width": 1200,
         "height": 800,
-        "resizable": true
+        "resizable": true,
+        "maximized": true,
+        "decorations": false,
+        "theme": "Dark",
+        "backgroundColor": "#0f1115"
       }
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default"]
+      "capabilities": [
+        "default"
+      ]
     }
   },
   "bundle": {

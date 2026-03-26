@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::config;
 use crate::db;
-use crate::dto::{JobProgress, JobProgressEvent};
+use crate::dto::{JobProgress, JobProgressEvent, JobTerminalEvent};
 use crate::index;
 use crate::roots;
 use crate::scan;
@@ -161,6 +161,8 @@ impl JobManager {
                 "scan async task started job_id={job_id_clone}"
             );
 
+            let app_for_join_err = app.clone();
+
             let res = tokio::task::spawn_blocking({
                 let job_id = job_id_clone.clone();
                 let token = token.clone();
@@ -188,16 +190,21 @@ impl JobManager {
                                 target: "vessel_jobs",
                                 "scan job failed job_id={job_id} err={e}"
                             );
-                            if let Err(db_err) = insert_job_terminal(
+                            match insert_job_terminal(
                                 &db_path_blocking,
                                 &job_id,
                                 "failed",
                                 Some(&e.to_string()),
                             ) {
-                                error!(
-                                    target: "vessel_jobs",
-                                    "failed to persist scan failure status job_id={job_id} err={db_err}"
-                                );
+                                Ok(()) => {
+                                    emit_job_terminal(&app, &job_id, "failed", None);
+                                }
+                                Err(db_err) => {
+                                    error!(
+                                        target: "vessel_jobs",
+                                        "failed to persist scan failure status job_id={job_id} err={db_err}"
+                                    );
+                                }
                             }
                         }
                     }
@@ -220,16 +227,21 @@ impl JobManager {
                     target: "vessel_jobs",
                     "scan spawn_blocking join error job_id={job_id_clone} err={e}"
                 );
-                if let Err(db_err) = insert_job_terminal(
+                match insert_job_terminal(
                     &db_path,
                     &job_id_clone,
                     "failed",
                     Some(&format!("join error: {e}")),
                 ) {
-                    error!(
-                        target: "vessel_jobs",
-                        "failed to persist join error status job_id={job_id_clone} err={db_err}"
-                    );
+                    Ok(()) => {
+                        emit_job_terminal(&app_for_join_err, &job_id_clone, "failed", None);
+                    }
+                    Err(db_err) => {
+                        error!(
+                            target: "vessel_jobs",
+                            "failed to persist join error status job_id={job_id_clone} err={db_err}"
+                        );
+                    }
                 }
             }
         });
@@ -311,6 +323,22 @@ fn emit_progress(app: &AppHandle, job_id: &str, p: &JobProgress) {
     );
 }
 
+fn emit_job_terminal(
+    app: &AppHandle,
+    job_id: &str,
+    status: &str,
+    progress: Option<JobProgress>,
+) {
+    let _ = app.emit(
+        "job_terminal",
+        JobTerminalEvent {
+            job_id: job_id.to_string(),
+            status: status.to_string(),
+            progress,
+        },
+    );
+}
+
 fn build_globset(patterns: &[String]) -> anyhow::Result<globset::GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for p in patterns {
@@ -328,6 +356,7 @@ fn run_scan_job(
 ) -> anyhow::Result<()> {
     if cancel.is_cancelled() {
         insert_job_terminal(db_path, job_id, "cancelled", None)?;
+        emit_job_terminal(app, job_id, "cancelled", None);
         return Ok(());
     }
 
@@ -339,6 +368,7 @@ fn run_scan_job(
         phase: "starting".into(),
         files_seen: 0,
         files_upserted: 0,
+        files_deleted: 0,
         current_path: None,
         roots_total: 0,
         roots_done: 0,
@@ -359,6 +389,7 @@ fn run_scan_job(
 
     if cancel.is_cancelled() {
         insert_job_terminal(db_path, job_id, "cancelled", None)?;
+        emit_job_terminal(app, job_id, "cancelled", None);
         return Ok(());
     }
 
@@ -372,6 +403,7 @@ fn run_scan_job(
             phase: "completed".into(),
             files_seen: 0,
             files_upserted: 0,
+            files_deleted: 0,
             current_path: None,
             roots_total: 0,
             roots_done: 0,
@@ -379,21 +411,25 @@ fn run_scan_job(
         update_job_progress_db(db_path, job_id, &p)?;
         emit_progress(app, job_id, &p);
         insert_job_terminal(db_path, job_id, "completed", None)?;
+        emit_job_terminal(app, job_id, "completed", Some(p.clone()));
         return Ok(());
     }
 
     let mut files_seen: u64 = 0;
     let mut files_upserted: u64 = 0;
+    let mut files_deleted: u64 = 0;
     let mut last_emit = Instant::now() - Duration::from_millis(500);
 
     for (ri, (root_id, root_path)) in root_rows.iter().enumerate() {
         if cancel.is_cancelled() {
             insert_job_terminal(db_path, job_id, "cancelled", None)?;
+            emit_job_terminal(app, job_id, "cancelled", None);
             return Ok(());
         }
 
         let path = PathBuf::from(root_path);
         let mut conn = db::open(db_path)?;
+        let mut seen_paths: HashSet<String> = HashSet::new();
 
         scan::walk_files(
             &path,
@@ -404,6 +440,9 @@ fn run_scan_job(
                 if cancel.is_cancelled() {
                     return Ok(());
                 }
+                for f in &batch {
+                    seen_paths.insert(f.rel_path.clone());
+                }
                 let n = index::apply_one_batch(&mut conn, *root_id, &batch)?;
                 files_upserted += n;
                 files_seen += batch.len() as u64;
@@ -412,6 +451,7 @@ fn run_scan_job(
                     phase: "indexing".into(),
                     files_seen,
                     files_upserted,
+                    files_deleted,
                     current_path: batch
                         .last()
                         .map(|f| f.rel_path.chars().take(200).collect()),
@@ -428,10 +468,25 @@ fn run_scan_job(
             },
         )?;
 
+        if cancel.is_cancelled() {
+            insert_job_terminal(db_path, job_id, "cancelled", None)?;
+            emit_job_terminal(app, job_id, "cancelled", None);
+            return Ok(());
+        }
+
+        let removed = index::reconcile_root_after_scan(
+            &mut conn,
+            *root_id,
+            &seen_paths,
+            !cancel.is_cancelled(),
+        )?;
+        files_deleted += removed;
+
         let p = JobProgress {
             phase: "indexing".into(),
             files_seen,
             files_upserted,
+            files_deleted,
             current_path: None,
             roots_total,
             roots_done: (ri + 1) as u32,
@@ -444,6 +499,7 @@ fn run_scan_job(
         phase: "completed".into(),
         files_seen,
         files_upserted,
+        files_deleted,
         current_path: None,
         roots_total,
         roots_done: roots_total,
@@ -451,5 +507,6 @@ fn run_scan_job(
     update_job_progress_db(db_path, job_id, &final_p)?;
     emit_progress(app, job_id, &final_p);
     insert_job_terminal(db_path, job_id, "completed", None)?;
+    emit_job_terminal(app, job_id, "completed", Some(final_p.clone()));
     Ok(())
 }

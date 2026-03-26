@@ -1,5 +1,5 @@
 use crate::dto::{
-    default_onboarding_completed_true, default_vessel_name, AppSettings, RootConfig,
+    default_onboarding_completed_true, default_theme, default_vessel_name, AppSettings, RootConfig,
 };
 use crate::path_norm;
 use anyhow::Context;
@@ -22,6 +22,8 @@ pub struct ConfigFile {
     pub vessel_name: String,
     #[serde(default = "default_onboarding_completed_true")]
     pub onboarding_completed: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_batch() -> usize {
@@ -36,6 +38,7 @@ impl Default for ConfigFile {
             batch_size: 2000,
             vessel_name: default_vessel_name(),
             onboarding_completed: false,
+            theme: default_theme(),
         }
     }
 }
@@ -78,6 +81,14 @@ impl From<ConfigFile> for AppSettings {
                 t.to_string()
             }
         };
+        let theme = {
+            let t = c.theme.trim();
+            if t == "light" || t == "dark" {
+                t.to_string()
+            } else {
+                default_theme()
+            }
+        };
         AppSettings {
             roots: c.roots,
             exclusion_globs: if c.exclusion_globs.is_empty() {
@@ -88,6 +99,7 @@ impl From<ConfigFile> for AppSettings {
             batch_size: c.batch_size,
             vessel_name,
             onboarding_completed: c.onboarding_completed,
+            theme,
         }
     }
 }
@@ -100,6 +112,7 @@ impl From<AppSettings> for ConfigFile {
             batch_size: s.batch_size,
             vessel_name: s.vessel_name,
             onboarding_completed: s.onboarding_completed,
+            theme: s.theme,
         }
     }
 }

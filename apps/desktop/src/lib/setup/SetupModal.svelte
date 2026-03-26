@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getSettings, saveSettings, type AppSettings } from "$lib/tauri";
+  import { applyTheme, type Theme } from "$lib/theme";
 
   let { onCompleted }: { onCompleted: () => void } = $props();
 
@@ -24,13 +25,22 @@
 
   let vesselName = $state("");
   let folderPath = $state("");
+  let themeChoice = $state<Theme>("dark");
   let error = $state<string | null>(null);
   let busy = $state(false);
+
+  function setTheme(t: Theme) {
+    themeChoice = t;
+    applyTheme(t);
+  }
 
   onMount(async () => {
     try {
       const s = await getSettings();
       vesselName = s.vesselName.trim() || "Vessel";
+      const t = s.theme === "light" ? "light" : "dark";
+      themeChoice = t;
+      applyTheme(t);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -59,6 +69,10 @@
       error = "Enter a vessel name.";
       return;
     }
+    if (!folderPath.trim()) {
+      error = "Choose a default folder to index.";
+      return;
+    }
     busy = true;
     error = null;
     try {
@@ -75,6 +89,7 @@
         vesselName: name,
         roots,
         onboardingCompleted: true,
+        theme: themeChoice,
       };
       await saveSettings(next);
       window.dispatchEvent(new CustomEvent("vessel-settings-changed"));
@@ -90,7 +105,9 @@
 <div class="overlay" role="dialog" aria-modal="true" aria-labelledby="setup-title">
   <div class="panel">
     <h1 id="setup-title">Welcome</h1>
-    <p class="lede">Choose a name for this computer and pick a folder to include in your first index.</p>
+    <p class="lede">
+      Name this install, pick a default folder to index, and choose appearance. You can change everything later in Settings.
+    </p>
 
     {#if error}
       <p class="error">{error}</p>
@@ -102,12 +119,34 @@
     </label>
 
     <div class="field">
-      <span>Folder to index</span>
+      <span>Default folder to index</span>
       <div class="row-input">
         <input type="text" readonly value={folderPath} placeholder="Browse to choose a folder" />
         <button type="button" class="secondary" onclick={() => void browse()}>Browse…</button>
       </div>
-      <p class="hint">You can add more folders later in Settings.</p>
+      <p class="hint">Required for first setup. You can add more folders in Settings.</p>
+    </div>
+
+    <div class="field">
+      <span>Appearance</span>
+      <div class="segment" role="group" aria-label="Theme">
+        <button
+          type="button"
+          class="seg-btn"
+          class:active={themeChoice === "light"}
+          onclick={() => setTheme("light")}
+        >
+          Light
+        </button>
+        <button
+          type="button"
+          class="seg-btn"
+          class:active={themeChoice === "dark"}
+          onclick={() => setTheme("dark")}
+        >
+          Dark
+        </button>
+      </div>
     </div>
 
     <div class="actions">
@@ -185,6 +224,43 @@
     margin: 6px 0 0;
     font-size: 12px;
     color: var(--text-muted);
+  }
+
+  .segment {
+    display: flex;
+    gap: 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    width: fit-content;
+  }
+
+  .seg-btn {
+    border: none;
+    padding: 10px 18px;
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .seg-btn + .seg-btn {
+    border-left: 1px solid var(--border);
+  }
+
+  .seg-btn:hover {
+    color: var(--text);
+  }
+
+  .seg-btn.active {
+    background: rgba(79, 140, 255, 0.18);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  :global([data-theme="light"]) .seg-btn.active {
+    background: rgba(45, 98, 216, 0.15);
   }
 
   .secondary {

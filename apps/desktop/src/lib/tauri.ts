@@ -12,12 +12,15 @@ export type AppSettings = {
   batchSize: number;
   vesselName: string;
   onboardingCompleted: boolean;
+  /** `"light"` | `"dark"` */
+  theme: string;
 };
 
 export type JobProgress = {
   phase: string;
   filesSeen: number;
   filesUpserted: number;
+  filesDeleted?: number;
   currentPath: string | null;
   rootsTotal: number;
   rootsDone: number;
@@ -40,6 +43,12 @@ export type SearchHit = {
   size: number;
   mtimeNs: number;
   rootPath: string;
+};
+
+export type SearchFilesOptions = {
+  extensionFilter?: string | null;
+  modifiedFromNs?: number | null;
+  modifiedToNs?: number | null;
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -70,8 +79,16 @@ export async function searchFiles(
   query: string,
   limit: number,
   offset: number,
+  options?: SearchFilesOptions | null,
 ): Promise<SearchHit[]> {
-  return invoke("search_files", { query, limit, offset });
+  return invoke("search_files", {
+    query,
+    limit,
+    offset,
+    extensionFilter: options?.extensionFilter ?? null,
+    modifiedFromNs: options?.modifiedFromNs ?? null,
+    modifiedToNs: options?.modifiedToNs ?? null,
+  });
 }
 
 export async function openFile(path: string): Promise<void> {
@@ -79,5 +96,8 @@ export async function openFile(path: string): Promise<void> {
 }
 
 export async function revealInExplorer(path: string): Promise<void> {
-  return invoke("reveal_in_explorer", { path });
+  const payload = { path };
+  // Temporary debug: remove after verifying Open Folder on Windows
+  console.log("[Vessel debug] revealInExplorer invoke payload:", JSON.stringify(payload));
+  return invoke("reveal_in_explorer", payload);
 }

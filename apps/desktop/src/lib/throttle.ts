@@ -1,3 +1,15 @@
+/** Schedules `fn` after `ms` of quiet time; each call resets the timer. */
+export function debounce(fn: () => void, ms: number): () => void {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  return () => {
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      timeout = null;
+      fn();
+    }, ms);
+  };
+}
+
 export function throttle<T extends unknown[]>(
   fn: (...args: T) => void,
   ms: number,

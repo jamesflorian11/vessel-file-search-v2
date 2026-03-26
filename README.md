@@ -11,6 +11,10 @@ On a new install (no saved settings yet), the app asks for:
 
 You can change the name and folders later under **Settings**.
 
+## Window behavior
+
+The main window starts **maximized** on launch (you can restore or resize it like any desktop app).
+
 ## Development
 
 Prerequisites: **Node.js**, **Rust**, and the usual Tauri dependencies for your platform.
@@ -28,6 +32,10 @@ Production build:
 ```bash
 npm run tauri build
 ```
+
+## Search
+
+The result list grows with the window. Use arrow keys, **Home** / **End**, and **Page Up** / **Page Down** to move the selection; **Enter** opens the selected file. If a result is stale (file moved or deleted), use **Activity** to run a scan and refresh the index.
 
 ## Configuration
 

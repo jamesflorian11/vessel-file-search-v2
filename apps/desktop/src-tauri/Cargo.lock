@@ -4328,6 +4328,7 @@ dependencies = [
  "tokio-util",
  "uuid",
  "walkdir",
+ "windows",
 ]
 
 [[package]]

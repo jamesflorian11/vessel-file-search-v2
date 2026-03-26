@@ -20,6 +20,9 @@ pub struct AppSettings {
     /// When false, the app shows first-run setup. Missing in old configs defaults to true.
     #[serde(default = "default_onboarding_completed_true")]
     pub onboarding_completed: bool,
+    /// UI theme: `light` or `dark`.
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 pub(crate) fn default_vessel_name() -> String {
@@ -30,12 +33,19 @@ pub(crate) fn default_onboarding_completed_true() -> bool {
     true
 }
 
+pub(crate) fn default_theme() -> String {
+    "dark".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobProgress {
     pub phase: String,
     pub files_seen: u64,
     pub files_upserted: u64,
+    /// Files removed from the index during a scan (paths no longer on disk).
+    #[serde(default)]
+    pub files_deleted: u64,
     pub current_path: Option<String>,
     pub roots_total: u32,
     pub roots_done: u32,
@@ -70,4 +80,13 @@ pub struct SearchHit {
 pub struct JobProgressEvent {
     pub job_id: String,
     pub progress: JobProgress,
+}
+
+/// Emitted when a job reaches a terminal status (completed, failed, cancelled).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobTerminalEvent {
+    pub job_id: String,
+    pub status: String,
+    pub progress: Option<JobProgress>,
 }

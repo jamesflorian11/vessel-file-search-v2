@@ -10,6 +10,9 @@
     type JobProgress,
   } from "$lib/tauri";
   import { throttle } from "$lib/throttle";
+  import { syncScanFromJobs, scanPhase, lastScanSummary } from "$lib/scanLifecycle";
+
+  let { embedded = false }: { embedded?: boolean } = $props();
 
   let jobs = $state<JobRecord[]>([]);
   let busy = $state(false);
@@ -43,6 +46,7 @@
       for (const j of jobs) {
         if (j.progress) progressById.set(j.id, j.progress);
       }
+      syncScanFromJobs(jobs);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -58,6 +62,7 @@
   onMount(() => {
     void refresh();
     let unlisten: (() => void) | undefined;
+    let unlistenTerminal: (() => void) | undefined;
     void listen<{ jobId: string; progress: JobProgress }>(
       "job_progress",
       (ev) => {
@@ -66,7 +71,15 @@
     ).then((fn) => {
       unlisten = fn;
     });
-    return () => unlisten?.();
+    void listen("job_terminal", () => {
+      void refresh();
+    }).then((fn) => {
+      unlistenTerminal = fn;
+    });
+    return () => {
+      unlisten?.();
+      unlistenTerminal?.();
+    };
   });
 
   async function onStartScan() {
@@ -108,44 +121,88 @@
     }
   }
 
+  function formatJobStatus(status: string): string {
+    switch (status) {
+      case "completed":
+        return "Completed";
+      case "failed":
+        return "Failed";
+      case "cancelled":
+        return "Cancelled";
+      case "running":
+        return "Running";
+      case "queued":
+        return "Queued";
+      default:
+        return status;
+    }
+  }
+
   function progressLabel(j: JobRecord): string {
     const p = j.progress ?? progressById.get(j.id);
-    if (!p) return j.status;
-    return `${p.phase} · seen ${p.filesSeen} · indexed ${p.filesUpserted}`;
+    if (!p) return formatJobStatus(j.status);
+    const seen = p.filesSeen.toLocaleString();
+    const updated = p.filesUpserted.toLocaleString();
+    const del =
+      p.filesDeleted != null && p.filesDeleted > 0
+        ? ` · ${p.filesDeleted.toLocaleString()} removed from index`
+        : "";
+    if (j.status === "running" || j.status === "queued") {
+      return `${seen} files checked so far · ${updated} added or updated in the index${del}`;
+    }
+    return `${seen} files checked · ${updated} added or updated in the index${del}`;
   }
 </script>
 
-<div class="view">
-  <header class="header">
-    <div>
-      <h1>Activity</h1>
-      <p class="lede">
-        Start a scan to update your index, or review past runs below. The window stays responsive while
-        work is in progress.
-      </p>
-      {#if hasActiveScan}
-        <p class="scan-hint">A scan is already queued or running.</p>
-      {/if}
-    </div>
-    <button
-      type="button"
-      class="primary"
-      disabled={busy || hasActiveScan}
-      onclick={() => void onStartScan()}
-    >
-      {busy ? "Starting…" : hasActiveScan ? "Scan in progress" : "Start scan"}
-    </button>
-  </header>
+<div class="view" class:embedded>
+  {#if !embedded}
+    <header class="header">
+      <div>
+        <h1>Activity</h1>
+        <p class="lede">
+          Start a scan to update your index, or review past runs below. The window stays responsive while
+          work is in progress.
+        </p>
+        {#if hasActiveScan}
+          <p class="scan-hint">A scan is already queued or running.</p>
+        {/if}
+      </div>
+      <button
+        type="button"
+        class="primary"
+        disabled={busy || $scanPhase === "scanning"}
+        onclick={() => void onStartScan()}
+      >
+        {#if busy}
+          Starting…
+        {:else if $scanPhase === "scanning"}
+          Scanning…
+        {:else if $lastScanSummary}
+          Rescan
+        {:else}
+          Start scan
+        {/if}
+      </button>
+    </header>
+  {:else if hasActiveScan}
+    <p class="embed-hint">A scan is already queued or running.</p>
+  {/if}
 
   {#if error}
     <p class="error">{error}</p>
   {/if}
 
   {#if jobs.length === 0}
-    <div class="empty">No jobs yet. Start a scan to index your roots.</div>
+    <div class="empty">
+      {#if embedded}
+        No jobs yet. Start a scan from the Search screen.
+      {:else}
+        No jobs yet. Start a scan to index your roots.
+      {/if}
+    </div>
   {:else}
     {#if activeJobs.length > 0}
-      <h2 class="section-title">Active</h2>
+      <h2 class="section-heading">In progress</h2>
       <ul class="jobs">
         {#each activeJobs as j}
           <li class="job">
@@ -168,7 +225,7 @@
 
     {#if historyJobs.length > 0}
       <div class="history-head">
-        <h2 class="section-title">History</h2>
+        <h2 class="section-heading">Past runs</h2>
         <button type="button" class="secondary small" onclick={() => void onClearHistory()}>
           Clear history
         </button>
@@ -201,6 +258,16 @@
     overflow: auto;
   }
 
+  .view.embedded {
+    gap: 14px;
+  }
+
+  .embed-hint {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
   .header {
     display: flex;
     align-items: flex-start;
@@ -228,13 +295,12 @@
     color: var(--text-muted);
   }
 
-  .section-title {
+  .section-heading {
     margin: 0 0 10px;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    color: var(--text);
+    letter-spacing: 0.01em;
   }
 
   .history-head {
@@ -247,7 +313,7 @@
     flex-wrap: wrap;
   }
 
-  .history-head .section-title {
+  .history-head .section-heading {
     margin: 0;
   }
 

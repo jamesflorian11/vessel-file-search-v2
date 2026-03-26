@@ -13,6 +13,9 @@ use crate::path_norm;
 use crate::roots;
 use crate::search;
 
+#[cfg(windows)]
+use crate::windows_explorer::{path_string_for_explorer_select, reveal_file_in_explorer};
+
 pub struct AppState {
     pub db_path: PathBuf,
     pub config_path: PathBuf,
@@ -49,6 +52,12 @@ pub fn save_settings(mut settings: AppSettings, state: State<'_, AppState>) -> R
         }
     }
     validate_globs(&settings.exclusion_globs)?;
+
+    let th = settings.theme.trim();
+    if th != "light" && th != "dark" {
+        return Err("theme must be \"light\" or \"dark\".".into());
+    }
+    settings.theme = th.to_string();
 
     config::save(&state.config_path, &settings).map_err(|e| e.to_string())?;
 
@@ -199,16 +208,28 @@ pub fn search_files(
     query: String,
     limit: i64,
     offset: i64,
+    extension_filter: Option<String>,
+    modified_from_ns: Option<i64>,
+    modified_to_ns: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchHit>, String> {
-    let q = query.trim();
-    if q.is_empty() {
-        return Ok(vec![]);
-    }
     let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
     let lim = limit.clamp(1, 2000);
     let off = offset.max(0);
-    search::search_paths(&conn, q, lim, off).map_err(|e| e.to_string())
+    let ext = extension_filter
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    search::search_paths(
+        &conn,
+        &query,
+        lim,
+        off,
+        ext,
+        modified_from_ns,
+        modified_to_ns,
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn resolve_existing_file(path: &str) -> Result<PathBuf, String> {
@@ -235,17 +256,48 @@ pub fn open_file(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn reveal_in_explorer(path: String) -> Result<(), String> {
+    info!(
+        target: "vessel_explorer",
+        "reveal_in_explorer: raw argument from frontend len={} bytes",
+        path.len()
+    );
+    info!(target: "vessel_explorer", "reveal_in_explorer: raw argument={path:?}");
+
     let pb = resolve_existing_file(&path)?;
+    info!(
+        target: "vessel_explorer",
+        "reveal_in_explorer: canonicalized path={}",
+        pb.display()
+    );
 
     #[cfg(windows)]
     {
-        let s = pb.to_string_lossy();
-        let arg = format!("/select,\"{}\"", s.replace('"', ""));
-        std::process::Command::new("explorer")
-            .arg(arg)
-            .spawn()
-            .map_err(|e| format!("Could not open Explorer: {e}"))?;
-        return Ok(());
+        let select_path = path_string_for_explorer_select(&pb);
+        info!(
+            target: "vessel_explorer",
+            "reveal_in_explorer: using ShellExecuteW select_path={select_path:?}"
+        );
+
+        match reveal_file_in_explorer(&select_path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                warn!(
+                    target: "vessel_explorer",
+                    "reveal_in_explorer: ShellExecuteW failed ({e}), opening parent folder"
+                );
+                let parent = pb
+                    .parent()
+                    .ok_or_else(|| "File has no parent directory.".to_string())?;
+                let parent_display = path_string_for_explorer_select(parent);
+                info!(
+                    target: "vessel_explorer",
+                    "reveal_in_explorer: fallback open folder path={parent_display:?}"
+                );
+                open::that(parent_display).map_err(|e2| {
+                    format!("Could not reveal in Explorer ({e}); could not open folder: {e2}")
+                })
+            }
+        }
     }
 
     #[cfg(not(windows))]
