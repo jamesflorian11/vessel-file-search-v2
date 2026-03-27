@@ -7,7 +7,7 @@ use tauri::State;
 
 use crate::config;
 use crate::db;
-use crate::dto::{AppSettings, JobRecord, JobProgress, SearchHit};
+use crate::dto::{AppSettings, IndexingStatus, SearchHit};
 use crate::jobs::JobManager;
 use crate::path_norm;
 use crate::roots;
@@ -69,7 +69,10 @@ pub fn save_settings(mut settings: AppSettings, state: State<'_, AppState>) -> R
 
 /// Validates the same enabled roots the scan worker will use (SQLite `roots` table), using
 /// canonicalize like `scan::walk_files`. Call before enqueueing a job.
-fn validate_start_scan(db_path: &Path, config_path: &Path) -> Result<(), String> {
+fn validate_start_scan(db_path: &Path, config_path: &Path, jobs: &JobManager) -> Result<(), String> {
+    if jobs.has_active_scan() {
+        return Err("A scan is already queued or running.".into());
+    }
     let settings = config::load(config_path).map_err(|e| e.to_string())?;
     let cfg_enabled = settings
         .roots
@@ -115,24 +118,13 @@ fn validate_start_scan(db_path: &Path, config_path: &Path) -> Result<(), String>
         }
     }
 
-    let mut stmt = conn
-        .prepare(
-            "SELECT 1 FROM jobs WHERE type = 'scan' AND status IN ('queued', 'running') LIMIT 1",
-        )
-        .map_err(|e| e.to_string())?;
-    let has_active = stmt.exists([]).map_err(|e| e.to_string())?;
-    if has_active {
-        warn!(target: "vessel_jobs", "validate_start_scan: rejected duplicate active scan");
-        return Err("A scan is already queued or running.".into());
-    }
-
     info!(target: "vessel_jobs", "validate_start_scan: ok");
     Ok(())
 }
 
 #[tauri::command]
 pub fn start_scan(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<String, String> {
-    validate_start_scan(&state.db_path, &state.config_path)?;
+    validate_start_scan(&state.db_path, &state.config_path, &state.jobs)?;
     let job_id = state
         .jobs
         .spawn_scan(app, state.db_path.clone(), state.config_path.clone())
@@ -148,59 +140,43 @@ pub fn start_scan(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<S
 pub fn cancel_job(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
     info!(target: "vessel_jobs", "cancel_job invoke job_id={job_id}");
     state.jobs.cancel(&job_id).map_err(|e| e.to_string())?;
-    crate::jobs::persist_job_cancelled(&state.db_path, &job_id).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn list_jobs(state: State<'_, AppState>) -> Result<Vec<JobRecord>, String> {
+pub fn get_indexing_status(state: State<'_, AppState>) -> Result<IndexingStatus, String> {
     let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, type AS job_type, status, progress_json, error, created_at, updated_at
-             FROM jobs ORDER BY datetime(created_at) DESC LIMIT 100",
-        )
-        .map_err(|e| e.to_string())?;
+    let files_indexed = db::count_present_files(&conn).map_err(|e| e.to_string())?;
+    let (last_scan_at, last_scan_status, last_scan_error) =
+        db::read_indexing_meta(&conn).map_err(|e| e.to_string())?;
 
-    let rows = stmt
-        .query_map([], |row| {
-            let progress_json: String = row.get(3)?;
-            let progress: Option<JobProgress> = if progress_json.is_empty() || progress_json == "null" {
-                None
-            } else {
-                serde_json::from_str(&progress_json).ok()
-            };
-            Ok(JobRecord {
-                id: row.get(0)?,
-                job_type: row.get(1)?,
-                status: row.get(2)?,
-                progress,
-                error: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+    if let Some((job_id, progress)) = state.jobs.get_scan_snapshot() {
+        return Ok(IndexingStatus {
+            state: "scanning".to_string(),
+            progress: Some(progress),
+            last_scan_at,
+            last_scan_status: last_scan_status.clone(),
+            last_error: None,
+            files_indexed,
+            active_job_id: Some(job_id),
+        });
+    }
 
-    Ok(rows)
-}
+    let ui_state = if last_scan_status == "failed" {
+        "error"
+    } else {
+        "idle"
+    };
 
-#[tauri::command]
-pub fn clear_job_history(state: State<'_, AppState>) -> Result<usize, String> {
-    let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
-    let n = conn
-        .execute(
-            "DELETE FROM jobs WHERE status IN ('completed', 'failed', 'cancelled')",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
-    info!(
-        target: "vessel_jobs",
-        "clear_job_history: removed {n} terminal job row(s)"
-    );
-    Ok(n)
+    Ok(IndexingStatus {
+        state: ui_state.to_string(),
+        progress: None,
+        last_scan_at,
+        last_scan_status,
+        last_error: last_scan_error,
+        files_indexed,
+        active_job_id: None,
+    })
 }
 
 #[tauri::command]

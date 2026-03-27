@@ -51,6 +51,7 @@ pub fn sync_roots(conn: &mut Connection, roots: &[RootConfig]) -> anyhow::Result
             path: path_norm::normalize_root_path(&r.path),
             display_name: r.display_name.clone(),
             enabled: r.enabled,
+            read_only: r.read_only,
         })
         .collect();
 
@@ -70,12 +71,14 @@ pub fn sync_roots(conn: &mut Connection, roots: &[RootConfig]) -> anyhow::Result
 
     for r in roots {
         let enabled = if r.enabled { 1i32 } else { 0i32 };
+        let read_only = if r.read_only { 1i32 } else { 0i32 };
         tx.execute(
-            "INSERT INTO roots (path, display_name, enabled) VALUES (?1, ?2, ?3)
+            "INSERT INTO roots (path, display_name, enabled, read_only) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(path) DO UPDATE SET
                display_name = excluded.display_name,
-               enabled = excluded.enabled",
-            params![&r.path, &r.display_name, enabled],
+               enabled = excluded.enabled,
+               read_only = excluded.read_only",
+            params![&r.path, &r.display_name, enabled, read_only],
         )?;
     }
 

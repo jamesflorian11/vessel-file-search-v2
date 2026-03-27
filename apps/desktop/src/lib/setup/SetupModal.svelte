@@ -81,7 +81,7 @@
       if (folderPath.trim()) {
         const p = normalizePathInput(folderPath);
         if (!roots.some((r) => r.path === p)) {
-          roots.push({ path: p, displayName: null, enabled: true });
+          roots.push({ path: p, displayName: null, enabled: true, readOnly: false });
         }
       }
       const next: AppSettings = {

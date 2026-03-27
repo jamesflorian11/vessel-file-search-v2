@@ -6,6 +6,13 @@ pub struct RootConfig {
     pub path: String,
     pub display_name: Option<String>,
     pub enabled: bool,
+    /// When true, Phase 2+ file actions should not create/upload/delete under this root (user intent).
+    #[serde(default = "default_root_read_only")]
+    pub read_only: bool,
+}
+
+pub(crate) fn default_root_read_only() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,16 +58,19 @@ pub struct JobProgress {
     pub roots_done: u32,
 }
 
+/// Current indexing UI state: idle, scanning, or error (last scan failed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct JobRecord {
-    pub id: String,
-    pub job_type: String,
-    pub status: String,
+pub struct IndexingStatus {
+    pub state: String,
     pub progress: Option<JobProgress>,
-    pub error: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub last_scan_at: Option<String>,
+    /// Last terminal outcome: `idle`, `completed`, `failed`, or `cancelled`.
+    pub last_scan_status: String,
+    pub last_error: Option<String>,
+    /// Live count of indexed file rows (`file_state = present`).
+    pub files_indexed: i64,
+    pub active_job_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

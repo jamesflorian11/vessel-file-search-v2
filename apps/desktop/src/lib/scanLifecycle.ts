@@ -1,5 +1,5 @@
 import { writable } from "svelte/store";
-import type { JobRecord } from "$lib/tauri";
+import type { IndexingStatus } from "$lib/tauri";
 
 export type ScanPhase = "idle" | "scanning" | "completed" | "failed";
 
@@ -11,76 +11,43 @@ export const lastScanSummary = writable<{
   completedAtIso: string;
 } | null>(null);
 
-let trackedActiveJobId: string | null = null;
-
-function applyLastCompletedFromHistory(jobs: JobRecord[]) {
-  const lastCompleted = jobs.find(
-    (j) => j.jobType === "scan" && j.status === "completed",
-  );
-  if (lastCompleted) {
-    const p = lastCompleted.progress;
-    lastScanSummary.set({
-      filesIndexed: p?.filesSeen ?? 0,
-      completedAtIso: lastCompleted.updatedAt,
-    });
-  }
-}
+export const indexingStatus = writable<IndexingStatus | null>(null);
 
 /**
- * Derive scan phase and last-scan info from the jobs list (source of truth after refresh).
+ * Maps `get_indexing_status` into sidebar/search scan UX state (no job history).
  */
-export function syncScanFromJobs(jobs: JobRecord[]) {
-  const active = jobs.find(
-    (j) =>
-      j.jobType === "scan" &&
-      (j.status === "queued" || j.status === "running"),
-  );
+export function syncFromIndexingStatus(s: IndexingStatus) {
+  indexingStatus.set(s);
 
-  if (active) {
-    trackedActiveJobId = active.id;
+  if (s.state === "scanning") {
     scanPhase.set("scanning");
     scanTerminalMessage.set(null);
-    scanLiveFilesSeen.set(active.progress?.filesSeen ?? 0);
+    scanLiveFilesSeen.set(s.progress?.filesSeen ?? 0);
     return;
   }
 
-  if (trackedActiveJobId) {
-    const ended = jobs.find((j) => j.id === trackedActiveJobId);
-    trackedActiveJobId = null;
-    scanLiveFilesSeen.set(0);
+  scanLiveFilesSeen.set(0);
 
-    if (!ended) {
-      applyLastCompletedFromHistory(jobs);
-      scanPhase.set("idle");
-      scanTerminalMessage.set(null);
-      return;
-    }
-
-    if (ended.status === "completed") {
-      const p = ended.progress;
-      const files = p?.filesSeen ?? 0;
-      lastScanSummary.set({
-        filesIndexed: files,
-        completedAtIso: ended.updatedAt,
-      });
-      scanPhase.set("completed");
-      scanTerminalMessage.set(null);
-      return;
-    }
-    if (ended.status === "failed") {
-      scanPhase.set("failed");
-      scanTerminalMessage.set(ended.error?.trim() || "Scan failed.");
-    } else {
-      scanPhase.set("idle");
-      scanTerminalMessage.set(null);
-    }
-    applyLastCompletedFromHistory(jobs);
+  if (s.state === "error") {
+    scanPhase.set("failed");
+    scanTerminalMessage.set(s.lastError?.trim() || "Scan failed.");
+    lastScanSummary.set(null);
     return;
   }
 
-  applyLastCompletedFromHistory(jobs);
-  scanPhase.set("idle");
   scanTerminalMessage.set(null);
+
+  if (s.lastScanStatus === "completed" && s.lastScanAt) {
+    scanPhase.set("completed");
+    lastScanSummary.set({
+      filesIndexed: s.filesIndexed,
+      completedAtIso: s.lastScanAt,
+    });
+    return;
+  }
+
+  scanPhase.set("idle");
+  lastScanSummary.set(null);
 }
 
 export function formatLastScanTime(iso: string): string {

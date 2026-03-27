@@ -1,17 +1,6 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
 
-  let logoFailed = $state(false);
-  let logoSrc = $state("/logo.png");
-
-  function onLogoError() {
-    if (logoSrc.endsWith("logo.png")) {
-      logoSrc = "/logo.svg";
-      return;
-    }
-    logoFailed = true;
-  }
-
   async function minimize() {
     await getCurrentWindow().minimize();
   }
@@ -25,22 +14,8 @@
   }
 </script>
 
-<header class="titlebar">
-  <div class="drag" data-tauri-drag-region>
-    {#if !logoFailed}
-      <img
-        class="title-logo"
-        src={logoSrc}
-        alt=""
-        width="28"
-        height="28"
-        onerror={onLogoError}
-      />
-    {:else}
-      <span class="title-fallback" aria-hidden="true">V</span>
-    {/if}
-    <span class="title-text">Vessel File Search</span>
-  </div>
+<header class="titlebar" aria-label="Vessel File Search">
+  <div class="drag" data-tauri-drag-region aria-hidden="true"></div>
   <div class="controls" data-tauri-drag-region="false">
     <button type="button" class="win-btn" title="Minimize" aria-label="Minimize" onclick={() => void minimize()}>
       <svg width="10" height="1" viewBox="0 0 10 1" aria-hidden="true"><rect width="10" height="1" fill="currentColor" /></svg>
@@ -71,45 +46,8 @@
   }
 
   .drag {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 12px;
     min-width: 0;
     flex: 1;
-  }
-
-  .title-logo {
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    object-fit: contain;
-    object-position: center;
-    background: var(--titlebar-logo-bg, #1c2230);
-    flex-shrink: 0;
-  }
-
-  .title-fallback {
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    background: linear-gradient(145deg, var(--accent), #2a4a9e);
-    color: #fff;
-    font-size: 14px;
-    font-weight: 700;
-    display: grid;
-    place-items: center;
-    flex-shrink: 0;
-  }
-
-  .title-text {
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .controls {

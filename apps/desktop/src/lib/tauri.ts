@@ -4,6 +4,8 @@ export type RootConfig = {
   path: string;
   displayName: string | null;
   enabled: boolean;
+  /** When true, future create/upload/delete actions should be blocked for this root (Phase 2). */
+  readOnly: boolean;
 };
 
 export type AppSettings = {
@@ -26,14 +28,14 @@ export type JobProgress = {
   rootsDone: number;
 };
 
-export type JobRecord = {
-  id: string;
-  jobType: string;
-  status: string;
+export type IndexingStatus = {
+  state: string;
   progress: JobProgress | null;
-  error: string | null;
-  createdAt: string;
-  updatedAt: string;
+  lastScanAt: string | null;
+  lastScanStatus: string;
+  lastError: string | null;
+  filesIndexed: number;
+  activeJobId: string | null;
 };
 
 export type SearchHit = {
@@ -67,12 +69,8 @@ export async function cancelJob(jobId: string): Promise<void> {
   return invoke("cancel_job", { jobId });
 }
 
-export async function listJobs(): Promise<JobRecord[]> {
-  return invoke("list_jobs");
-}
-
-export async function clearJobHistory(): Promise<number> {
-  return invoke("clear_job_history");
+export async function getIndexingStatus(): Promise<IndexingStatus> {
+  return invoke("get_indexing_status");
 }
 
 export async function searchFiles(
@@ -96,8 +94,5 @@ export async function openFile(path: string): Promise<void> {
 }
 
 export async function revealInExplorer(path: string): Promise<void> {
-  const payload = { path };
-  // Temporary debug: remove after verifying Open Folder on Windows
-  console.log("[Vessel debug] revealInExplorer invoke payload:", JSON.stringify(payload));
-  return invoke("reveal_in_explorer", payload);
+  return invoke("reveal_in_explorer", { path });
 }

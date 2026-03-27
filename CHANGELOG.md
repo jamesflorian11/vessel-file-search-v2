@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **Branding:** In-app logo remains [`apps/desktop/src/assets/logo.png`](apps/desktop/src/assets/logo.png) (optional sync from repo root [`logo.png`](logo.png)). **App icons** are regenerated from [`apps/desktop/src-tauri/app-icon-source.png`](apps/desktop/src-tauri/app-icon-source.png) via `npm run tauri -- icon src-tauri/app-icon-source.png` into [`apps/desktop/src-tauri/icons/`](apps/desktop/src-tauri/icons/); `bundle.icon` in `tauri.conf.json` now lists the full desktop set (`32x32`, `128x128`, `128x128@2x`, `icon.png`, `icon.icns`, `icon.ico`). Rebuild the app after icon changes (`tauri dev` restart or `tauri build`); Windows may cache the old taskbar icon.
 - **Scan / FTS:** Replaced invalid FTS5 delete-with-`INSERT` usage with `DELETE FROM fts_files WHERE rowid = ?`, fixing “SQL logic error” during scans when updating indexed files. FTS insert/delete steps now include clearer error context in logs.
 - **Open Folder / Explorer:** Search hits include a server-built `fullPath` with correct path separators, so “Open Folder” opens the selected file’s folder and selects the file in File Explorer on Windows instead of misbehaving with mixed `/` and `\` paths.
 - **Shell:** Settings are no longer re-fetched on every navigation; branding and onboarding state refresh on launch and when settings change (or after first-run setup).
@@ -22,5 +23,5 @@
 - **Search:** Result ordering uses BM25 plus stable tie-breakers (path length and path name) for more predictable rankings.
 - **Result actions:** Clearer messages when a file is missing, inaccessible, or when Explorer or the default app cannot open it; clipboard errors are explained in plain language.
 - **First-run setup:** Wording updated for the vessel workflow (no “this computer” phrasing).
-- User-facing copy on Search, Activity, Library, and Settings was revised for clearer, less technical wording.
-- **Activity:** Section titles use sentence case (“In progress”, “Past runs”) with calmer styling; job progress lines use clearer wording (files checked / added or updated in the index) with formatted numbers.
+- User-facing copy on Search, Library, and Settings was revised for clearer, less technical wording.
+- **Indexing UX:** Removed indexing **job history** (no “Past runs” list, no “Clear history”, no persisted scan job rows). Replaced with a minimal **indexing status** (idle / scanning / error), optional last scan time, and live file count via `get_indexing_status`. The legacy `jobs` SQLite table is dropped on upgrade; last scan outcome is stored in `indexing_meta` only.

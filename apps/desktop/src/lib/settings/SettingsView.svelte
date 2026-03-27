@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getSettings, saveSettings, type AppSettings } from "$lib/tauri";
-  import JobsView from "$lib/jobs/JobsView.svelte";
+  import IndexingStatusPanel from "$lib/indexing/IndexingStatusPanel.svelte";
   import { applyTheme, type Theme } from "$lib/theme";
 
   /** Match Rust path_norm::normalize_root_path (trim + strip wrapping quotes). */
@@ -123,7 +123,7 @@
       error = "That path is already listed.";
       return;
     }
-    roots.push({ path, displayName: null, enabled: true });
+    roots.push({ path, displayName: null, enabled: true, readOnly: false });
     settings = { ...settings, roots };
     newPath = "";
     error = null;
@@ -143,6 +143,16 @@
       ...settings,
       roots: settings.roots.map((r) =>
         r.path === path ? { ...r, enabled: !r.enabled } : r,
+      ),
+    };
+    persistNow();
+  }
+
+  function toggleReadOnly(path: string) {
+    settings = {
+      ...settings,
+      roots: settings.roots.map((r) =>
+        r.path === path ? { ...r, readOnly: !r.readOnly } : r,
       ),
     };
     persistNow();
@@ -245,7 +255,11 @@
 
       <section class="card card-roots">
         <h2>Indexed folders</h2>
-        <p class="hint">Add one or more folders to search. Turn off a folder to skip it on the next scan.</p>
+        <p class="hint">
+          Add one or more folders to search. Turn off a folder to skip it on the next scan. Mark
+          <strong>Read-only</strong> for shares you must not write to (Phase 2 will enforce create/upload
+          there).
+        </p>
         <div class="row-input">
           <input
             type="text"
@@ -265,6 +279,14 @@
                   onchange={() => toggleRoot(r.path)}
                 />
                 <span>enabled</span>
+              </label>
+              <label class="toggle">
+                <input
+                  type="checkbox"
+                  checked={r.readOnly}
+                  onchange={() => toggleReadOnly(r.path)}
+                />
+                <span>read-only</span>
               </label>
               <span class="path">{r.path}</span>
               <button type="button" class="linkish" onclick={() => removeRoot(r.path)}>Remove</button>
@@ -330,10 +352,10 @@
       </section>
 
       <section class="card activity-card">
-        <h2>Indexing activity</h2>
-        <p class="hint">Scan jobs and history. Start or rescan from the Search screen.</p>
+        <h2>Indexing</h2>
+        <p class="hint">Current index status. Start or rescan from the Search screen.</p>
         <div class="activity-embed">
-          <JobsView embedded />
+          <IndexingStatusPanel embedded />
         </div>
       </section>
     </div>

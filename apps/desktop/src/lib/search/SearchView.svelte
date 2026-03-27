@@ -6,7 +6,7 @@
     revealInExplorer,
     searchFiles,
     startScan,
-    listJobs,
+    getIndexingStatus,
     type SearchHit,
     type JobProgress,
   } from "$lib/tauri";
@@ -15,7 +15,7 @@
     scanLiveFilesSeen,
     lastScanSummary,
     scanTerminalMessage,
-    syncScanFromJobs,
+    syncFromIndexingStatus,
     formatLastScanTime,
   } from "$lib/scanLifecycle";
 
@@ -97,10 +97,10 @@
     return hits[selectedIndex];
   });
 
-  async function refreshJobs() {
+  async function refreshIndexing() {
     try {
-      const j = await listJobs();
-      syncScanFromJobs(j);
+      const s = await getIndexingStatus();
+      syncFromIndexingStatus(s);
     } catch {
       // keep previous
     }
@@ -231,13 +231,6 @@
   async function revealPath(path: string) {
     actionError = null;
     closeCtxMenu();
-    // Temporary debug: remove after verifying Open Folder on Windows
-    console.log("[Vessel debug] Open Folder click", {
-      pathArg: path,
-      selectedIndex,
-      selectedHitFullPath: selectedHit?.fullPath,
-      selectedHitId: selectedHit?.id,
-    });
     try {
       await revealInExplorer(path);
     } catch (e) {
@@ -394,7 +387,7 @@
     scanError = null;
     try {
       await startScan();
-      await refreshJobs();
+      await refreshIndexing();
     } catch (e) {
       scanError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -403,7 +396,7 @@
   }
 
   onMount(() => {
-    void refreshJobs();
+    void refreshIndexing();
     let unlistenProgress: (() => void) | undefined;
     let unlistenTerminal: (() => void) | undefined;
     void listen<{ jobId: string; progress: JobProgress }>(
@@ -411,13 +404,13 @@
       (ev) => {
         scanPhase.set("scanning");
         scanLiveFilesSeen.set(ev.payload.progress.filesSeen);
-        void refreshJobs();
+        void refreshIndexing();
       },
     ).then((fn) => {
       unlistenProgress = fn;
     });
     void listen("job_terminal", () => {
-      void refreshJobs();
+      void refreshIndexing();
     }).then((fn) => {
       unlistenTerminal = fn;
     });

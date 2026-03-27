@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import logoPng from "../../assets/logo.png";
   import SearchView from "$lib/search/SearchView.svelte";
   import SettingsView from "$lib/settings/SettingsView.svelte";
   import SetupModal from "$lib/setup/SetupModal.svelte";
@@ -17,7 +18,6 @@
   let onboardingCompleted = $state(true);
 
   let logoFailed = $state(false);
-  let logoSrc = $state("/logo.png");
 
   let sidebarCollapsed = $state(false);
 
@@ -27,10 +27,6 @@
   });
 
   function onLogoError() {
-    if (logoSrc.endsWith("logo.png")) {
-      logoSrc = "/logo.svg";
-      return;
-    }
     logoFailed = true;
   }
 
@@ -88,24 +84,18 @@
   <div class="app-body">
     <aside class="rail" class:collapsed={sidebarCollapsed} aria-label="Main navigation">
       <div class="brand" title={vesselName.trim() || "Vessel"}>
-        {#if !logoFailed}
-          <img
-            class="brand-logo"
-            class:compact={sidebarCollapsed}
-            src={logoSrc}
-            alt=""
-            width="52"
-            height="52"
-            onerror={onLogoError}
-          />
-        {:else}
-          <span class="brand-mark" class:compact={sidebarCollapsed}>{brandInitial}</span>
-        {/if}
-        {#if !sidebarCollapsed}
-          <div class="brand-text">
+        <div class="brand-stack" class:collapsed={sidebarCollapsed}>
+          {#if !logoFailed}
+            <div class="brand-logo-wrap" class:compact={sidebarCollapsed}>
+              <img class="brand-logo" src={logoPng} alt="" width="110" height="110" onerror={onLogoError} />
+            </div>
+          {:else}
+            <span class="brand-mark" class:compact={sidebarCollapsed}>{brandInitial}</span>
+          {/if}
+          {#if !sidebarCollapsed}
             <div class="brand-title">{vesselName.trim() || "Vessel"}</div>
-          </div>
-        {/if}
+          {/if}
+        </div>
       </div>
       <nav class="nav" aria-label="Primary">
         {#each navItems as item}
@@ -194,84 +184,103 @@
   }
 
   .rail {
-    width: 200px;
+    width: 240px;
     flex-shrink: 0;
     background: var(--bg-elevated);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    padding: 14px 10px;
-    gap: 18px;
+    padding: 18px 14px 14px;
+    gap: 0;
     transition: width 0.18s ease;
   }
 
   .rail.collapsed {
     width: 56px;
+    padding-left: 10px;
+    padding-right: 10px;
   }
 
   .brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 4px 6px;
-    min-height: 52px;
+    flex-shrink: 0;
+    margin-bottom: 14px;
   }
 
-  .rail.collapsed .brand {
-    justify-content: center;
-    padding: 4px 0;
+  .brand-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 24px;
+  }
+
+  .brand-stack.collapsed {
+    gap: 0;
+  }
+
+  .brand-logo-wrap {
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.16);
+  }
+
+  :global([data-theme="light"]) .brand-logo-wrap {
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.06);
+  }
+
+  .brand-logo-wrap.compact {
+    width: 32px;
+    height: 32px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
   }
 
   .brand-logo {
-    width: 52px;
-    height: 52px;
-    border-radius: 14px;
-    object-fit: contain;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
     object-position: center;
-    background: var(--titlebar-logo-bg);
-    box-shadow: var(--shadow);
-    flex-shrink: 0;
-  }
-
-  .brand-logo.compact {
-    width: 40px;
-    height: 40px;
-    border-radius: 12px;
+    transform: scale(1.045);
+    display: block;
   }
 
   .brand-mark {
-    width: 52px;
-    height: 52px;
-    border-radius: 14px;
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
     background: linear-gradient(145deg, var(--accent), #2a4a9e);
     display: grid;
     place-items: center;
     font-weight: 700;
-    font-size: 22px;
-    box-shadow: var(--shadow);
+    font-size: 42px;
     flex-shrink: 0;
     color: #fff;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.16);
   }
 
   .brand-mark.compact {
-    width: 40px;
-    height: 40px;
-    font-size: 17px;
-    border-radius: 12px;
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
   }
 
   .brand-title {
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    font-size: 15px;
-    line-height: 1.25;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    font-size: 17px;
+    line-height: 1.3;
     word-break: break-word;
+    color: var(--text);
+    max-width: 100%;
+    padding: 0 2px;
   }
 
   .nav {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
     flex: 1;
     min-height: 0;
   }
@@ -341,7 +350,7 @@
 
   .rail-footer {
     margin-top: auto;
-    padding-top: 8px;
+    padding-top: 10px;
     border-top: 1px solid var(--border);
   }
 
@@ -351,24 +360,29 @@
     align-items: center;
     justify-content: flex-start;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 10px 12px;
     border: none;
     border-radius: var(--radius);
     background: transparent;
     color: var(--text-muted);
     font-size: 13px;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    opacity: 0.78;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease,
+      opacity 0.15s ease;
   }
 
   .rail.collapsed .collapse-toggle {
     justify-content: center;
-    padding: 8px;
+    padding: 10px;
   }
 
   .collapse-toggle:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.04);
     color: var(--text);
+    opacity: 1;
   }
 
   :global([data-theme="light"]) .collapse-toggle:hover {

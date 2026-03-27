@@ -1,5 +1,16 @@
+//! SQLite catalog for Vessel File Search.
+//!
+//! # Invariants
+//!
+//! - **`files.id`** is stable for the life of the row; pins, tags, policy, and audit reference
+//!   `file_id`, not only paths.
+//! - **`root_id` + `rel_path`** is canonical; absolute paths are derived for the OS.
+//! - **FTS** (`fts_files`) is for search only — not retention or policy decisions.
+//! - **Enrichment** belongs in side tables keyed by `file_id`; user-specific rows may use
+//!   nullable `actor_profile_id` for future identity/sync.
+
 use anyhow::Context;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 pub fn open(db_path: &std::path::Path) -> anyhow::Result<Connection> {
     let conn = Connection::open(db_path).with_context(|| format!("open {}", db_path.display()))?;
@@ -12,6 +23,7 @@ pub fn open(db_path: &std::path::Path) -> anyhow::Result<Connection> {
     ",
     )?;
     migrate(&conn)?;
+    apply_schema_fixups(&conn)?;
     Ok(conn)
 }
 
@@ -26,7 +38,8 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             path TEXT NOT NULL UNIQUE,
             display_name TEXT,
-            enabled INTEGER NOT NULL DEFAULT 1
+            enabled INTEGER NOT NULL DEFAULT 1,
+            read_only INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS files (
@@ -48,17 +61,6 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             tokenize = 'unicode61'
         );
 
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
-            status TEXT NOT NULL,
-            payload_json TEXT,
-            progress_json TEXT,
-            error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS file_hashes (
             file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
             kind TEXT NOT NULL,
@@ -70,4 +72,119 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     )?;
 
     Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, col: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1 LIMIT 1"
+    ))?;
+    let mut rows = stmt.query(rusqlite::params![col])?;
+    Ok(rows.next()?.is_some())
+}
+
+/// Upgrades databases created before `roots.read_only` existed.
+fn ensure_roots_read_only_column(conn: &Connection) -> anyhow::Result<()> {
+    if !column_exists(conn, "roots", "read_only")? {
+        conn.execute(
+            "ALTER TABLE roots ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Policy-as-data (Phase 5) and append-only audit trail — idempotent `CREATE IF NOT EXISTS`.
+fn ensure_governance_tables(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS policy_rule_sets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS policy_rules (
+            id TEXT PRIMARY KEY,
+            rule_set_id TEXT NOT NULL REFERENCES policy_rule_sets(id) ON DELETE CASCADE,
+            priority INTEGER NOT NULL DEFAULT 0,
+            match_json TEXT NOT NULL,
+            action_json TEXT NOT NULL,
+            UNIQUE(rule_set_id, priority)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_policy_rules_set ON policy_rules(rule_set_id);
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_profile_id TEXT,
+            payload_json TEXT,
+            rule_id TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_occurred ON audit_log(occurred_at);
+    ",
+    )?;
+    Ok(())
+}
+
+fn apply_schema_fixups(conn: &Connection) -> anyhow::Result<()> {
+    ensure_roots_read_only_column(conn)?;
+    migrate_drop_legacy_jobs_table(conn)?;
+    ensure_indexing_meta_table(conn)?;
+    ensure_governance_tables(conn)?;
+    Ok(())
+}
+
+/// Legacy installs had a `jobs` table for scan history; it is no longer used.
+fn migrate_drop_legacy_jobs_table(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch("DROP TABLE IF EXISTS jobs;")?;
+    Ok(())
+}
+
+fn ensure_indexing_meta_table(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS indexing_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            last_scan_at TEXT,
+            last_scan_status TEXT NOT NULL DEFAULT 'idle',
+            last_scan_error TEXT
+        );
+
+        INSERT OR IGNORE INTO indexing_meta (id, last_scan_status) VALUES (1, 'idle');
+    ",
+    )?;
+    Ok(())
+}
+
+/// Rows in `files` with `file_state = 'present'` (live index size).
+pub fn count_present_files(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE file_state = 'present'",
+        [],
+        |row| row.get(0),
+    )
+}
+
+pub fn read_indexing_meta(conn: &Connection) -> rusqlite::Result<(Option<String>, String, Option<String>)> {
+    conn.query_row(
+        "SELECT last_scan_at, last_scan_status, last_scan_error FROM indexing_meta WHERE id = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+}
+
+pub fn write_indexing_meta(
+    conn: &Connection,
+    last_scan_at: &str,
+    last_scan_status: &str,
+    last_scan_error: Option<&str>,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE indexing_meta SET last_scan_at = ?1, last_scan_status = ?2, last_scan_error = ?3 WHERE id = 1",
+        params![last_scan_at, last_scan_status, last_scan_error],
+    )
 }
