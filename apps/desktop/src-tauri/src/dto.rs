@@ -30,6 +30,15 @@ pub struct AppSettings {
     /// UI theme: `light` or `dark`.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// When true, scans read text from supported file types into the index (off by default for safety).
+    #[serde(default = "default_content_indexing_enabled")]
+    pub content_indexing_enabled: bool,
+    /// If empty, built-in defaults apply (pdf, txt, md, csv, json, log). Otherwise only these extensions (lowercase, with or without leading dot).
+    #[serde(default)]
+    pub content_index_extensions: Vec<String>,
+    /// Max bytes read from disk per file for body extraction (caps memory and IO).
+    #[serde(default = "default_content_max_bytes_per_file")]
+    pub content_max_bytes_per_file: u32,
 }
 
 pub(crate) fn default_vessel_name() -> String {
@@ -44,6 +53,14 @@ pub(crate) fn default_theme() -> String {
     "dark".to_string()
 }
 
+pub(crate) fn default_content_indexing_enabled() -> bool {
+    false
+}
+
+pub(crate) fn default_content_max_bytes_per_file() -> u32 {
+    10 * 1024 * 1024
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobProgress {
@@ -56,6 +73,9 @@ pub struct JobProgress {
     pub current_path: Option<String>,
     pub roots_total: u32,
     pub roots_done: u32,
+    /// Mirrors scan config: whether the active run is indexing file bodies.
+    #[serde(default)]
+    pub content_indexing_enabled: bool,
 }
 
 /// Current indexing UI state: idle, scanning, or error (last scan failed).
@@ -71,6 +91,9 @@ pub struct IndexingStatus {
     /// Live count of indexed file rows (`file_state = present`).
     pub files_indexed: i64,
     pub active_job_id: Option<String>,
+    /// From config: whether content (body) indexing is enabled for the next scan / search.
+    #[serde(default)]
+    pub content_indexing_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

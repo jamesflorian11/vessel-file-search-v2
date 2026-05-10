@@ -52,11 +52,24 @@ These are **different files** and are wired separately:
 
 The result list grows with the window. Use arrow keys, **Home** / **End**, and **Page Up** / **Page Down** to move the selection; **Enter** opens the selected file. If a result is stale (file moved or deleted), run **Rescan** from the Search screen to refresh the index.
 
+**Result display (readability):** Each row shows a **primary line** (a short, human-friendly label derived from the file name) and a **secondary line** (a **condensed** full path with the start of the path, an ellipsis, and the last folders plus file name). This is **display only**—files are not renamed on disk. **Open File**, **Open Folder**, and **Copy File Path** still use the real full path. Hover the row (or use the tooltip on the path area) to see the full path. Display labels use simple deterministic rules (e.g. trimming noisy prefixes or dates, a few path-aware titles like Edge cache `index.txt`); when no rule applies, the primary line shows the cleaned file name. Labels are best-effort and may not match how you would name the file manually.
+
 **Indexing:** There is no scan history list. The app shows a compact **indexing status** (idle / scanning / error), optional last scan time, and how many files are in the index. Scans are a background concern, not a log you maintain.
+
+### Content-aware search (optional)
+
+By default, search matches **file name** and **full path** via the SQLite FTS index. You can optionally index **file text** so keywords inside supported files appear in results.
+
+- **Setting:** In **Settings → Indexing**, turn on **Index file text for search** (default **off** so scans stay fast and the database stays smaller). Changing this clears stored text and requires a **Rescan** on the Search screen to rebuild body content.
+- **Supported types (first pass):** `.pdf`, `.txt`, `.md`, `.csv`, `.json`, `.log`. You can restrict to a custom extension list in Settings (**comma-separated**, e.g. `pdf, txt, md`); leave the field empty to use the defaults. Entries are normalized (trim, lowercase, leading dots removed) when saved.
+- **Limits:** Roughly **512 KiB** of normalized text is stored per file. Reads are capped per file by **Max bytes read per file for text** (default **10 MiB**, configurable between 256 KiB and 100 MiB). PDF extraction uses a **timeout** (45 seconds) so bad PDFs do not block scanning indefinitely.
+- **Not supported:** OCR (scanned images are not read as text). PDF text quality depends on how the file was produced.
 
 ## Configuration
 
 Settings are stored under the application data directory as `config.json`, alongside the SQLite database used for the index.
+
+New settings for content indexing: `contentIndexingEnabled`, `contentIndexExtensions` (empty means built-in list), `contentMaxBytesPerFile`.
 
 ## Product strategy (V2)
 

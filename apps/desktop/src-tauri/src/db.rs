@@ -12,6 +12,8 @@
 use anyhow::Context;
 use rusqlite::{params, Connection};
 
+use crate::path_norm::join_root_rel;
+
 pub fn open(db_path: &std::path::Path) -> anyhow::Result<Connection> {
     let conn = Connection::open(db_path).with_context(|| format!("open {}", db_path.display()))?;
     conn.execute_batch(
@@ -134,7 +136,96 @@ fn apply_schema_fixups(conn: &Connection) -> anyhow::Result<()> {
     ensure_roots_read_only_column(conn)?;
     migrate_drop_legacy_jobs_table(conn)?;
     ensure_indexing_meta_table(conn)?;
+    ensure_files_content_columns(conn)?;
+    migrate_fts_files_v2(conn)?;
     ensure_governance_tables(conn)?;
+    Ok(())
+}
+
+/// Extracted searchable text per file (capped during extraction). `content_sig` tracks which
+/// `quick_sig` the stored text corresponds to.
+fn ensure_files_content_columns(conn: &Connection) -> anyhow::Result<()> {
+    if !column_exists(conn, "files", "content_text")? {
+        conn.execute("ALTER TABLE files ADD COLUMN content_text TEXT", [])?;
+    }
+    if !column_exists(conn, "files", "content_sig")? {
+        conn.execute("ALTER TABLE files ADD COLUMN content_sig TEXT", [])?;
+    }
+    Ok(())
+}
+
+/// FTS5 cannot be altered: replace legacy single-column `fts_files` with path + full_path + content.
+fn migrate_fts_files_v2(conn: &Connection) -> anyhow::Result<()> {
+    let sql: Option<String> = match conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts_files'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(s) => Some(s),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e.into()),
+    };
+    let Some(sql) = sql else {
+        return Ok(());
+    };
+    if sql.contains("full_path") {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "
+        DROP TABLE IF EXISTS fts_files;
+        CREATE VIRTUAL TABLE fts_files USING fts5(
+            path,
+            full_path,
+            content,
+            tokenize = 'unicode61'
+        );
+    ",
+    )?;
+    backfill_fts_files(conn)?;
+    Ok(())
+}
+
+fn backfill_fts_files(conn: &Connection) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT f.id, f.rel_path, r.path, COALESCE(f.content_text, '')
+         FROM files f
+         JOIN roots r ON r.id = f.root_id
+         WHERE f.file_state = 'present'",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut insert = conn.prepare(
+        "INSERT INTO fts_files(rowid, path, full_path, content) VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let rel: String = row.get(1)?;
+        let root: String = row.get(2)?;
+        let content: String = row.get(3)?;
+        let full = join_root_rel(&root, &rel);
+        insert.execute(params![id, rel, full, content])?;
+    }
+    Ok(())
+}
+
+/// Clear stored body text and FTS `content` column (path / full_path columns unchanged).
+/// Used when turning content indexing off or on so the next scan does not search stale text.
+pub fn clear_all_file_content(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE files SET content_text = NULL, content_sig = NULL",
+        [],
+    )?;
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare("SELECT id FROM files")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for id in ids {
+        conn.execute(
+            "UPDATE fts_files SET content = '' WHERE rowid = ?1",
+            [id],
+        )?;
+    }
     Ok(())
 }
 

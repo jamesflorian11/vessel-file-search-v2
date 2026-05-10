@@ -17,7 +17,10 @@
     scanTerminalMessage,
     syncFromIndexingStatus,
     formatLastScanTime,
+    indexingStatus,
   } from "$lib/scanLifecycle";
+  import { condensePath } from "$lib/search/condensePath";
+  import { fileNameFromFullPath, smartDisplayLabel } from "$lib/search/displayLabel";
 
   let query = $state("");
   let extensionFilter = $state("");
@@ -38,7 +41,7 @@
   let paginationInFlight = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const rowHeight = 44;
+  const rowHeight = 52;
   let scrollerClientHeight = $state(0);
   let scrollTop = $state(0);
   let scrollerEl = $state<HTMLDivElement | undefined>(undefined);
@@ -75,6 +78,14 @@
 
   function fullPath(h: SearchHit): string {
     return h.fullPath;
+  }
+
+  function rowDisplay(h: SearchHit): { label: string; condensed: string } {
+    const fn = fileNameFromFullPath(h.fullPath);
+    return {
+      label: smartDisplayLabel(fn, h.fullPath),
+      condensed: condensePath(h.fullPath),
+    };
   }
 
   let viewportHeight = $derived.by(() => Math.max(120, scrollerClientHeight || 0));
@@ -434,11 +445,7 @@
 <div class="view">
   <header class="header">
     <h1>Search</h1>
-    <p class="lede">
-      Find files by name or path across indexed folders. Results update as you type (short delay).
-      Leave the search box empty and press Search to browse everything in the index (with optional
-      filters). Large result sets load in pages as you scroll.
-    </p>
+    <p class="lede">Search files by name, path, or indexed file text (when enabled in Settings).</p>
   </header>
 
   <div class="scan-row" aria-label="Indexing" aria-live="polite">
@@ -450,7 +457,10 @@
             <span class="scan-line strong"
               >Scanning… {$scanLiveFilesSeen.toLocaleString()} files</span
             >
-            <span class="scan-sub">Updating the index — you can keep using the app.</span>
+            <span class="scan-sub"
+              >Updating the index — you can keep using the app.{#if $indexingStatus?.contentIndexingEnabled}
+                Text indexing is on.{/if}</span
+            >
           </div>
         </div>
       {:else if $scanPhase === "completed" && $lastScanSummary}
@@ -504,7 +514,7 @@
     <input
       bind:this={searchInputEl}
       type="search"
-      placeholder="Search by file or path (FTS: words are AND’d)"
+      placeholder="Search…"
       bind:value={query}
       autocomplete="off"
       oninput={scheduleDebouncedSearch}
@@ -512,6 +522,7 @@
     />
     <button type="submit" class="primary">Search</button>
   </form>
+  <p class="search-hint muted">Search by file name, path, or indexed file text.</p>
 
   <div class="filters" aria-label="Filters">
     <label class="filter">
@@ -539,7 +550,7 @@
 
   <div class="frame">
     <div class="col-head">
-      <span class="h path">Path</span>
+      <span class="h path">File</span>
       <span class="h size">Size</span>
       <span class="h time">Modified</span>
     </div>
@@ -585,8 +596,7 @@
     >
       {#if hits.length === 0 && !loading}
         <div class="placeholder">
-          No results yet. Add folders in Settings, start a scan above, then type a query or browse
-          with an empty search and optional filters.
+          No results yet. Add folders in Settings and run a scan to build the index.
         </div>
       {:else}
         <div class="phantom" style:height="{hits.length * rowHeight}px">
@@ -595,6 +605,7 @@
             style:transform="translateY({visible.start * rowHeight}px)"
           >
             {#each visible.slice as h, i (h.id)}
+              {@const disp = rowDisplay(h)}
               <div
                 class="row"
                 class:selected={selectedIndex === visible.start + i}
@@ -607,8 +618,12 @@
                   onRowContextMenu(e, visible.start + i, h)}
                 role="option"
                 aria-selected={selectedIndex === visible.start + i}
+                aria-label={h.fullPath}
               >
-                <span class="cell path" title={h.fullPath}>{h.fullPath}</span>
+                <div class="cell path path-stack" title={h.fullPath}>
+                  <span class="path-primary">{disp.label}</span>
+                  <span class="path-secondary">{disp.condensed}</span>
+                </div>
                 <span class="cell size">{formatSize(h.size)}</span>
                 <span class="cell time">{formatTime(h.mtimeNs)}</span>
               </div>
@@ -790,6 +805,12 @@
     font-size: 15px;
   }
 
+  .search-hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   .filters {
     display: flex;
     flex-wrap: wrap;
@@ -931,7 +952,7 @@
     grid-template-columns: minmax(0, 1fr) 100px 180px;
     gap: 8px;
     align-items: center;
-    padding: 0 12px;
+    padding: 4px 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     box-sizing: border-box;
     cursor: default;
@@ -946,6 +967,34 @@
     display: block;
     min-width: 0;
     font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .path-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    justify-content: center;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .path-primary {
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1.25;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .path-secondary {
+    font-size: 11px;
+    line-height: 1.25;
+    color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -1,4 +1,5 @@
 use crate::dto::{
+    default_content_indexing_enabled, default_content_max_bytes_per_file,
     default_onboarding_completed_true, default_theme, default_vessel_name, AppSettings, RootConfig,
 };
 use crate::path_norm;
@@ -24,6 +25,12 @@ pub struct ConfigFile {
     pub onboarding_completed: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default = "default_content_indexing_enabled")]
+    pub content_indexing_enabled: bool,
+    #[serde(default)]
+    pub content_index_extensions: Vec<String>,
+    #[serde(default = "default_content_max_bytes_per_file")]
+    pub content_max_bytes_per_file: u32,
 }
 
 fn default_batch() -> usize {
@@ -39,6 +46,9 @@ impl Default for ConfigFile {
             vessel_name: default_vessel_name(),
             onboarding_completed: false,
             theme: default_theme(),
+            content_indexing_enabled: default_content_indexing_enabled(),
+            content_index_extensions: vec![],
+            content_max_bytes_per_file: default_content_max_bytes_per_file(),
         }
     }
 }
@@ -89,6 +99,9 @@ impl From<ConfigFile> for AppSettings {
                 default_theme()
             }
         };
+        let max_bytes = c
+            .content_max_bytes_per_file
+            .clamp(256 * 1024, 100 * 1024 * 1024);
         AppSettings {
             roots: c.roots,
             exclusion_globs: if c.exclusion_globs.is_empty() {
@@ -100,6 +113,9 @@ impl From<ConfigFile> for AppSettings {
             vessel_name,
             onboarding_completed: c.onboarding_completed,
             theme,
+            content_indexing_enabled: c.content_indexing_enabled,
+            content_index_extensions: c.content_index_extensions,
+            content_max_bytes_per_file: max_bytes,
         }
     }
 }
@@ -113,6 +129,9 @@ impl From<AppSettings> for ConfigFile {
             vessel_name: s.vessel_name,
             onboarding_completed: s.onboarding_completed,
             theme: s.theme,
+            content_indexing_enabled: s.content_indexing_enabled,
+            content_index_extensions: s.content_index_extensions,
+            content_max_bytes_per_file: s.content_max_bytes_per_file,
         }
     }
 }

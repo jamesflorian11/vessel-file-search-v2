@@ -36,6 +36,9 @@ fn validate_globs(patterns: &[String]) -> Result<(), String> {
 
 #[tauri::command]
 pub fn save_settings(mut settings: AppSettings, state: State<'_, AppState>) -> Result<(), String> {
+    let prev = config::load(&state.config_path).ok();
+    let prev_content_on = prev.as_ref().map(|p| p.content_indexing_enabled);
+
     path_norm::normalize_app_settings(&mut settings);
     if settings.vessel_name.trim().is_empty() {
         return Err("Vessel name cannot be empty.".into());
@@ -59,10 +62,18 @@ pub fn save_settings(mut settings: AppSettings, state: State<'_, AppState>) -> R
     }
     settings.theme = th.to_string();
 
+    settings.content_max_bytes_per_file = settings
+        .content_max_bytes_per_file
+        .clamp(256 * 1024, 100 * 1024 * 1024);
+
     config::save(&state.config_path, &settings).map_err(|e| e.to_string())?;
 
     let mut conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
     roots::sync_roots(&mut conn, &settings.roots).map_err(|e| e.to_string())?;
+
+    if prev_content_on != Some(settings.content_indexing_enabled) {
+        db::clear_all_file_content(&conn).map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }
@@ -145,6 +156,10 @@ pub fn cancel_job(job_id: String, state: State<'_, AppState>) -> Result<(), Stri
 
 #[tauri::command]
 pub fn get_indexing_status(state: State<'_, AppState>) -> Result<IndexingStatus, String> {
+    let content_indexing_enabled = config::load(&state.config_path)
+        .map(|s| s.content_indexing_enabled)
+        .unwrap_or(false);
+
     let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
     let files_indexed = db::count_present_files(&conn).map_err(|e| e.to_string())?;
     let (last_scan_at, last_scan_status, last_scan_error) =
@@ -159,6 +174,7 @@ pub fn get_indexing_status(state: State<'_, AppState>) -> Result<IndexingStatus,
             last_error: None,
             files_indexed,
             active_job_id: Some(job_id),
+            content_indexing_enabled,
         });
     }
 
@@ -176,6 +192,7 @@ pub fn get_indexing_status(state: State<'_, AppState>) -> Result<IndexingStatus,
         last_error: last_scan_error,
         files_indexed,
         active_job_id: None,
+        content_indexing_enabled,
     })
 }
 

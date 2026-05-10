@@ -9,6 +9,9 @@ If icons/ is missing most files (e.g. only icon.ico remains), first rebuild the 
   2) npm run tauri -- icon <that.png>   (from apps/desktop)
   3) Restore the original icon.ico bytes if the CLI overwrote them.
   4) Run this script so every PNG + icon.icns matches icon.ico exactly.
+
+For **Windows taskbar clarity**, prefer `rebuild_optimized_icons.py`, which adds 20×20/24×24
+ICO layers and applies small-size sharpening (same master .ico bitmap).
 """
 from __future__ import annotations
 

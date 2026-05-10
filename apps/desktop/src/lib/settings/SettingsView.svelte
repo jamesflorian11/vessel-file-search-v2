@@ -31,9 +31,14 @@
     vesselName: "Vessel",
     onboardingCompleted: true,
     theme: "dark",
+    contentIndexingEnabled: false,
+    contentIndexExtensions: [],
+    contentMaxBytesPerFile: 10 * 1024 * 1024,
   });
   let newPath = $state("");
   let newGlob = $state("");
+  /** Plain-text mirror of `settings.contentIndexExtensions` — always a string; never `.join()` in markup. */
+  let contentExtensionsField = $state("");
   let error = $state<string | null>(null);
   /** Subtle header feedback; not shown when null. */
   let saveFeedback = $state<"saving" | "saved" | "failed" | null>(null);
@@ -66,6 +71,56 @@
     void runSave();
   }
 
+  /** Ensures nested fields exist after `getSettings()` so UI never calls methods on undefined. */
+  function normalizeAppSettings(s: AppSettings): AppSettings {
+    const ext = s.contentIndexExtensions;
+    const extensions = Array.isArray(ext)
+      ? ext
+          .map((x) => String(x).trim().toLowerCase().replace(/^\./, ""))
+          .filter(Boolean)
+      : [];
+    const maxB = s.contentMaxBytesPerFile;
+    const maxBytes =
+      typeof maxB === "number" && Number.isFinite(maxB)
+        ? maxB
+        : 10 * 1024 * 1024;
+    return {
+      ...s,
+      roots: Array.isArray(s.roots) ? s.roots : [],
+      exclusionGlobs: Array.isArray(s.exclusionGlobs) ? s.exclusionGlobs : [],
+      contentIndexExtensions: extensions,
+      contentMaxBytesPerFile: maxBytes,
+      contentIndexingEnabled: Boolean(s.contentIndexingEnabled),
+    };
+  }
+
+  function formatExtensionsList(arr: string[] | undefined | null): string {
+    if (!Array.isArray(arr)) return "";
+    return arr
+      .filter((x) => typeof x === "string")
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  /** Comma / semicolon / newline separated; safe on any string. */
+  function parseExtensionsList(raw: string): string[] {
+    try {
+      const parts = String(raw ?? "")
+        .split(/[,;\n]+/)
+        .map((x) => x.trim().toLowerCase())
+        .map((x) => (x.startsWith(".") ? x.slice(1) : x))
+        .filter(Boolean);
+      return [...new Set(parts)];
+    } catch {
+      return [];
+    }
+  }
+
+  function syncContentExtensionsFieldFromSettings() {
+    contentExtensionsField = formatExtensionsList(settings.contentIndexExtensions);
+  }
+
   async function runSave() {
     if (saveInFlight) {
       saveQueued = true;
@@ -82,6 +137,12 @@
         }
         if (settings.batchSize < 200 || settings.batchSize > 20000) {
           throw new Error("Batch size must be between 200 and 20000.");
+        }
+        if (
+          settings.contentMaxBytesPerFile < 262144 ||
+          settings.contentMaxBytesPerFile > 104857600
+        ) {
+          throw new Error("Max bytes per file must be between 256 KiB and 100 MiB.");
         }
         await saveSettings(settings);
         window.dispatchEvent(new CustomEvent("vessel-settings-changed"));
@@ -104,7 +165,9 @@
   onMount(() => {
     void (async () => {
       try {
-        settings = await getSettings();
+        const loaded = await getSettings();
+        settings = normalizeAppSettings(loaded);
+        syncContentExtensionsFieldFromSettings();
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
       }
@@ -196,6 +259,30 @@
     if (Number.isNaN(v)) return;
     settings = { ...settings, batchSize: v };
     scheduleDebouncedSave();
+  }
+
+  function onContentMaxBytesInput(e: Event) {
+    const raw = (e.currentTarget as HTMLInputElement).value;
+    const v = parseInt(raw, 10);
+    if (Number.isNaN(v)) return;
+    settings = { ...settings, contentMaxBytesPerFile: v };
+    scheduleDebouncedSave();
+  }
+
+  function onContentExtensionsFieldInput() {
+    settings = {
+      ...settings,
+      contentIndexExtensions: parseExtensionsList(contentExtensionsField),
+    };
+    scheduleDebouncedSave();
+  }
+
+  function toggleContentIndexing() {
+    settings = {
+      ...settings,
+      contentIndexingEnabled: !settings.contentIndexingEnabled,
+    };
+    persistNow();
   }
 
   async function browseFolder() {
@@ -349,6 +436,43 @@
             oninput={onBatchInput}
           />
         </label>
+
+        <div class="content-index-block">
+          <label class="toggle content-toggle">
+            <input
+              type="checkbox"
+              checked={settings.contentIndexingEnabled}
+              onchange={toggleContentIndexing}
+            />
+            <span>Index file text for search</span>
+          </label>
+          <p class="hint">
+            When on, scans read text from supported types (see project README) and match it in search. Off by
+            default — longer scans and a larger database. After changing this, run a rescan on Search.
+          </p>
+          <label class="field">
+            <span>Limit indexing to extensions (optional)</span>
+            <input
+              type="text"
+              placeholder="e.g. pdf, txt, md — leave empty for defaults"
+              bind:value={contentExtensionsField}
+              oninput={onContentExtensionsFieldInput}
+              autocomplete="off"
+            />
+            <span class="hint field-hint">Separate with commas, e.g. <code>pdf, txt, md</code>. Empty uses built-in defaults.</span>
+          </label>
+          <label class="field">
+            <span>Max bytes read per file for text</span>
+            <input
+              type="number"
+              min="262144"
+              max="104857600"
+              step="65536"
+              value={settings.contentMaxBytesPerFile}
+              oninput={onContentMaxBytesInput}
+            />
+          </label>
+        </div>
       </section>
 
       <section class="card activity-card">
@@ -446,6 +570,16 @@
     border-radius: var(--radius);
     padding: 18px 20px;
     background: var(--bg-elevated);
+  }
+
+  .content-index-block {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .content-toggle {
+    margin-bottom: 8px;
   }
 
   .card h2 {
@@ -567,6 +701,17 @@
     border-radius: 8px;
     border: 1px solid var(--border);
     background: var(--bg);
+  }
+
+  .field-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+  }
+
+  .field-hint code {
+    font-size: 11px;
   }
 
   .error {

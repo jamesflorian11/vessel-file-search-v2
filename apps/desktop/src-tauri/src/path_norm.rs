@@ -1,6 +1,16 @@
 //! Trim and strip accidental wrapping quotes from user-entered paths.
 
+use std::path::Path;
+
 use crate::dto::AppSettings;
+
+/// Absolute path string for FTS `full_path` and search display (matches `SearchHit.full_path` logic).
+pub fn join_root_rel(root: &str, rel_path: &str) -> String {
+    Path::new(root)
+        .join(rel_path.replace('/', std::path::MAIN_SEPARATOR_STR))
+        .to_string_lossy()
+        .to_string()
+}
 
 pub fn normalize_root_path(s: &str) -> String {
     let mut t = s.trim().to_string();

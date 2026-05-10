@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::config;
+use crate::content_extract;
 use crate::db;
 use crate::dto::{JobProgress, JobProgressEvent, JobTerminalEvent};
 use crate::index;
@@ -117,6 +118,9 @@ impl JobManager {
             g.cancel.insert(job_id.clone(), token.clone());
         }
 
+        let content_flag = config::load(&config_path)
+            .map(|s| s.content_indexing_enabled)
+            .unwrap_or(false);
         let queued = JobProgress {
             phase: "queued".into(),
             files_seen: 0,
@@ -125,6 +129,7 @@ impl JobManager {
             current_path: None,
             roots_total: 0,
             roots_done: 0,
+            content_indexing_enabled: content_flag,
         };
         self.register_active_scan(&job_id, queued)?;
 
@@ -312,6 +317,7 @@ fn run_scan_job(
         current_path: None,
         roots_total: 0,
         roots_done: 0,
+        content_indexing_enabled: settings.content_indexing_enabled,
     };
     emit_progress(app, job_id, &initial, mgr);
 
@@ -334,6 +340,7 @@ fn run_scan_job(
             current_path: None,
             roots_total: 0,
             roots_done: 0,
+            content_indexing_enabled: settings.content_indexing_enabled,
         };
         emit_progress(app, job_id, &p, mgr);
         finalize_scan_terminal(app, db_path, mgr, job_id, "completed", None, Some(p))?;
@@ -352,11 +359,15 @@ fn run_scan_job(
         }
 
         let path = PathBuf::from(root_path);
+        let root_canon = path
+            .canonicalize()
+            .with_context(|| format!("canonicalize root {}", root_path))?;
+        let root_abs_str = root_canon.to_string_lossy().to_string();
         let mut conn = db::open(db_path)?;
         let mut seen_paths: HashSet<String> = HashSet::new();
 
         scan::walk_files(
-            &path,
+            &root_canon,
             &globs,
             cancel,
             batch_size.min(4096).max(256),
@@ -367,7 +378,14 @@ fn run_scan_job(
                 for f in &batch {
                     seen_paths.insert(f.rel_path.clone());
                 }
-                let n = index::apply_one_batch(&mut conn, *root_id, &batch)?;
+                let n = index::apply_one_batch(&mut conn, *root_id, &root_abs_str, &batch)?;
+                content_extract::index_batch_file_contents(
+                    &mut conn,
+                    &root_canon,
+                    *root_id,
+                    &batch,
+                    &settings,
+                )?;
                 files_upserted += n;
                 files_seen += batch.len() as u64;
 
@@ -381,6 +399,7 @@ fn run_scan_job(
                         .map(|f| f.rel_path.chars().take(200).collect()),
                     roots_total,
                     roots_done: ri as u32,
+                    content_indexing_enabled: settings.content_indexing_enabled,
                 };
 
                 if last_emit.elapsed() >= Duration::from_millis(100) {
@@ -412,6 +431,7 @@ fn run_scan_job(
             current_path: None,
             roots_total,
             roots_done: (ri + 1) as u32,
+            content_indexing_enabled: settings.content_indexing_enabled,
         };
         emit_progress(app, job_id, &p, mgr);
     }
@@ -424,6 +444,7 @@ fn run_scan_job(
         current_path: None,
         roots_total,
         roots_done: roots_total,
+        content_indexing_enabled: settings.content_indexing_enabled,
     };
     emit_progress(app, job_id, &final_p, mgr);
     finalize_scan_terminal(

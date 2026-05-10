@@ -31,8 +31,11 @@
       const p = s.progress;
       const seen = p?.filesSeen ?? 0;
       const phase = p?.phase?.trim() || "";
-      if (phase === "queued") return "Queued…";
-      return `Scanning… ${seen.toLocaleString()} files seen`;
+      const textOn =
+        p?.contentIndexingEnabled ?? s.contentIndexingEnabled ?? false;
+      const suffix = textOn ? " · text indexing on" : "";
+      if (phase === "queued") return `Queued…${suffix}`;
+      return `Scanning… ${seen.toLocaleString()} files seen${suffix}`;
     }
     if (s.state === "error") {
       return s.lastError?.trim() || "Last scan failed.";

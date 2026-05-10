@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod content_extract;
 mod db;
 mod dto;
 mod index;

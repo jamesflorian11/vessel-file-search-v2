@@ -1,8 +1,8 @@
 use anyhow::Context;
 use rusqlite::{params, Connection};
-use std::path::Path;
 
 use crate::dto::SearchHit;
+use crate::path_norm::join_root_rel;
 
 pub fn build_fts_query(raw: &str) -> anyhow::Result<String> {
     let parts: Vec<&str> = raw.split_whitespace().filter(|s| !s.is_empty()).collect();
@@ -34,10 +34,7 @@ pub fn extension_like_pattern(extension_filter: Option<&str>) -> String {
 fn row_to_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchHit> {
     let rel: String = row.get(1)?;
     let root: String = row.get(4)?;
-    let full_path = Path::new(&root)
-        .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR))
-        .to_string_lossy()
-        .to_string();
+    let full_path = join_root_rel(&root, &rel);
     Ok(SearchHit {
         id: row.get(0)?,
         path: rel,
@@ -105,7 +102,7 @@ pub fn search_paths(
               AND (?2 = '' OR lower(f.rel_path) LIKE ?2)
               AND (?3 IS NULL OR f.mtime_ns >= ?3)
               AND (?4 IS NULL OR f.mtime_ns <= ?4)
-            ORDER BY bm25(fts_files), length(f.rel_path) ASC, f.rel_path COLLATE NOCASE
+            ORDER BY bm25(fts_files, 5.0, 3.0, 1.0), length(f.rel_path) ASC, f.rel_path COLLATE NOCASE
             LIMIT ?5 OFFSET ?6
         ",
         )

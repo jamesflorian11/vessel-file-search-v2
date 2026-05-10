@@ -16,6 +16,12 @@ export type AppSettings = {
   onboardingCompleted: boolean;
   /** `"light"` | `"dark"` */
   theme: string;
+  /** When true, scans extract searchable text from supported file types (default off). */
+  contentIndexingEnabled: boolean;
+  /** If empty, built-in extensions apply. Otherwise only these (e.g. pdf, txt). */
+  contentIndexExtensions: string[];
+  /** Max bytes read per file for text extraction (256 KiB–100 MiB). */
+  contentMaxBytesPerFile: number;
 };
 
 export type JobProgress = {
@@ -26,6 +32,7 @@ export type JobProgress = {
   currentPath: string | null;
   rootsTotal: number;
   rootsDone: number;
+  contentIndexingEnabled?: boolean;
 };
 
 export type IndexingStatus = {
@@ -36,6 +43,7 @@ export type IndexingStatus = {
   lastError: string | null;
   filesIndexed: number;
   activeJobId: string | null;
+  contentIndexingEnabled: boolean;
 };
 
 export type SearchHit = {

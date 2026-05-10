@@ -4,6 +4,7 @@ use anyhow::Context;
 use log::info;
 use rusqlite::{params, Connection};
 
+use crate::path_norm::join_root_rel;
 use crate::scan::ScannedFile;
 
 /// Batch size for populating the temp table of seen paths (keeps statements small).
@@ -22,19 +23,55 @@ fn fts_delete(conn: &Connection, file_id: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fts_insert(conn: &Connection, file_id: i64, path: &str) -> anyhow::Result<()> {
+/// Inserts one FTS row: relative path, absolute path for full-path queries, and body text (may be empty until extraction).
+fn fts_insert_row(
+    conn: &Connection,
+    file_id: i64,
+    rel_path: &str,
+    root_abs: &str,
+    content: &str,
+) -> anyhow::Result<()> {
+    let full = join_root_rel(root_abs, rel_path);
+    conn
+        .execute(
+            "INSERT INTO fts_files(rowid, path, full_path, content) VALUES (?1, ?2, ?3, ?4)",
+            params![file_id, rel_path, full, content],
+        )
+        .with_context(|| {
+            format!(
+                "fts_insert_row(rowid={file_id}, path_len={}, full_len={}, content_len={})",
+                rel_path.len(),
+                full.len(),
+                content.len()
+            )
+        })?;
+    Ok(())
+}
+
+/// After extraction: persist normalized text and mirror into FTS `content` column.
+pub fn set_file_content_indexed(
+    conn: &Connection,
+    file_id: i64,
+    content_text: &str,
+    content_sig: &str,
+) -> anyhow::Result<()> {
     conn.execute(
-        "INSERT INTO fts_files(rowid, path) VALUES (?1, ?2)",
-        params![file_id, path],
-    )
-    .with_context(|| format!("fts_insert(rowid={file_id}, path_len={})", path.len()))?;
+        "UPDATE files SET content_text = ?1, content_sig = ?2 WHERE id = ?3",
+        params![content_text, content_sig, file_id],
+    )?;
+    conn.execute(
+        "UPDATE fts_files SET content = ?1 WHERE rowid = ?2",
+        params![content_text, file_id],
+    )?;
     Ok(())
 }
 
 /// Apply a batch of scanned files for one root inside an existing transaction.
+/// `root_abs` must be the canonical root directory path used to build absolute paths for FTS.
 pub fn apply_batch(
     tx: &rusqlite::Transaction<'_>,
     root_id: i64,
+    root_abs: &str,
     batch: &[ScannedFile],
 ) -> anyhow::Result<u64> {
     let mut upserted: u64 = 0;
@@ -55,11 +92,12 @@ pub fn apply_batch(
             Some((_id, Some(prev))) if prev == sig => {}
             Some((id, _)) => {
                 tx.execute(
-                    "UPDATE files SET size = ?1, mtime_ns = ?2, quick_sig = ?3, file_state = 'present' WHERE id = ?4",
+                    "UPDATE files SET size = ?1, mtime_ns = ?2, quick_sig = ?3, file_state = 'present',
+                     content_text = NULL, content_sig = NULL WHERE id = ?4",
                     params![f.size, f.mtime_ns, &sig, id],
                 )?;
                 fts_delete(tx, id)?;
-                fts_insert(tx, id, &f.rel_path)?;
+                fts_insert_row(tx, id, &f.rel_path, root_abs, "")?;
                 upserted += 1;
             }
             None => {
@@ -69,7 +107,7 @@ pub fn apply_batch(
                     params![root_id, &f.rel_path, f.size, f.mtime_ns, &sig],
                 )?;
                 let id = tx.last_insert_rowid();
-                fts_insert(tx, id, &f.rel_path)?;
+                fts_insert_row(tx, id, &f.rel_path, root_abs, "")?;
                 upserted += 1;
             }
         }
@@ -81,10 +119,11 @@ pub fn apply_batch(
 pub fn apply_one_batch(
     conn: &mut Connection,
     root_id: i64,
+    root_abs: &str,
     batch: &[ScannedFile],
 ) -> anyhow::Result<u64> {
     let tx = conn.transaction().context("begin apply_one_batch")?;
-    let n = apply_batch(&tx, root_id, batch)?;
+    let n = apply_batch(&tx, root_id, root_abs, batch)?;
     tx.commit()?;
     Ok(n)
 }
