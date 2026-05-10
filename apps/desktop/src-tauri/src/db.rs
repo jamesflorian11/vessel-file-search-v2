@@ -168,7 +168,7 @@ fn migrate_fts_files_v2(conn: &Connection) -> anyhow::Result<()> {
     let Some(sql) = sql else {
         return Ok(());
     };
-    if sql.contains("full_path") {
+    if fts_files_has_v2_shape(conn, &sql)? {
         return Ok(());
     }
     conn.execute_batch(
@@ -184,6 +184,20 @@ fn migrate_fts_files_v2(conn: &Connection) -> anyhow::Result<()> {
     )?;
     backfill_fts_files(conn)?;
     Ok(())
+}
+
+fn fts_files_has_v2_shape(conn: &Connection, fts_sql: &str) -> anyhow::Result<bool> {
+    if !(fts_sql.contains("path") && fts_sql.contains("full_path") && fts_sql.contains("content")) {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare("SELECT name FROM pragma_table_info('fts_files')")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let has_path = cols.iter().any(|c| c == "path");
+    let has_full_path = cols.iter().any(|c| c == "full_path");
+    let has_content = cols.iter().any(|c| c == "content");
+    Ok(has_path && has_full_path && has_content)
 }
 
 fn backfill_fts_files(conn: &Connection) -> anyhow::Result<()> {
@@ -278,4 +292,39 @@ pub fn write_indexing_meta(
         "UPDATE indexing_meta SET last_scan_at = ?1, last_scan_status = ?2, last_scan_error = ?3 WHERE id = 1",
         params![last_scan_at, last_scan_status, last_scan_error],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fts_v2_shape_detection_requires_all_columns() {
+        let conn = Connection::open_in_memory().expect("open sqlite in-memory");
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE fts_files USING fts5(path, full_path, content, tokenize='unicode61');",
+        )
+        .expect("create fts");
+        assert!(
+            fts_files_has_v2_shape(
+                &conn,
+                "CREATE VIRTUAL TABLE fts_files USING fts5(path, full_path, content, tokenize='unicode61')"
+            )
+            .expect("shape check")
+        );
+    }
+
+    #[test]
+    fn fts_v2_shape_detection_rejects_legacy_shape() {
+        let conn = Connection::open_in_memory().expect("open sqlite in-memory");
+        conn.execute_batch("CREATE VIRTUAL TABLE fts_files USING fts5(path, tokenize='unicode61');")
+            .expect("create legacy fts");
+        assert!(
+            !fts_files_has_v2_shape(
+                &conn,
+                "CREATE VIRTUAL TABLE fts_files USING fts5(path, tokenize='unicode61')"
+            )
+            .expect("shape check")
+        );
+    }
 }

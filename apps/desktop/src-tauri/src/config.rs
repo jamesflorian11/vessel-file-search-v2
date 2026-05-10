@@ -58,7 +58,8 @@ pub fn load(path: &Path) -> anyhow::Result<AppSettings> {
         return Ok(ConfigFile::default().into());
     }
     let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let parsed: ConfigFile = serde_json::from_str(&raw).unwrap_or_default();
+    let parsed: ConfigFile = serde_json::from_str(&raw)
+        .with_context(|| format!("parse {} as JSON config", path.display()))?;
     let mut settings: AppSettings = parsed.into();
     if path_norm::normalize_app_settings(&mut settings) {
         info!(

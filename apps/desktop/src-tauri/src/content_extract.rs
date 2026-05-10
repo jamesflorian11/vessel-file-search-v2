@@ -17,6 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
+use log::warn;
 use rusqlite::{params, Connection};
 
 use crate::dto::AppSettings;
@@ -32,6 +33,16 @@ const PDF_EXTRACT_TIMEOUT: Duration = Duration::from_secs(45);
 /// Default extensions when `content_index_extensions` is empty (lowercase, no dot).
 pub const DEFAULT_CONTENT_EXTENSIONS: &[&str] =
     &["pdf", "txt", "md", "csv", "json", "log"];
+
+#[derive(Debug, Clone, Default)]
+pub struct ContentIndexStats {
+    pub extracted_ok: u64,
+    pub extract_errors: u64,
+    pub extract_timeouts: u64,
+    pub skipped_after_pdf_timeout: u64,
+    pub skipped_oversize: u64,
+    pub skipped_extension: u64,
+}
 
 pub fn normalized_extension_list(settings: &AppSettings) -> Vec<String> {
     if settings.content_index_extensions.is_empty() {
@@ -104,7 +115,12 @@ fn read_plain_text_capped(path: &Path, max_read: u64) -> anyhow::Result<String> 
     Ok(normalize_text(&s))
 }
 
-fn extract_pdf_text(path: &Path) -> anyhow::Result<String> {
+enum ExtractError {
+    Timeout,
+    Other(anyhow::Error),
+}
+
+fn extract_pdf_text(path: &Path) -> Result<String, ExtractError> {
     let path = path.to_path_buf();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -113,8 +129,8 @@ fn extract_pdf_text(path: &Path) -> anyhow::Result<String> {
     });
     match rx.recv_timeout(PDF_EXTRACT_TIMEOUT) {
         Ok(Ok(s)) => Ok(normalize_text(&s)),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err(anyhow::anyhow!("pdf extract timeout")),
+        Ok(Err(e)) => Err(ExtractError::Other(e)),
+        Err(_) => Err(ExtractError::Timeout),
     }
 }
 
@@ -125,13 +141,15 @@ pub fn index_batch_file_contents(
     root_id: i64,
     batch: &[ScannedFile],
     settings: &AppSettings,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ContentIndexStats> {
+    let mut stats = ContentIndexStats::default();
     if !settings.content_indexing_enabled {
-        return Ok(());
+        return Ok(stats);
     }
 
     let allowed = normalized_extension_list(settings);
     let max_read = u64::from(settings.content_max_bytes_per_file);
+    let mut disable_pdf_for_batch = false;
 
     for f in batch {
         let sig = quick_sig(f.size, f.mtime_ns);
@@ -158,11 +176,13 @@ pub fn index_batch_file_contents(
 
         if !ext_matches(&abs, &allowed) {
             index::set_file_content_indexed(conn, file_id, "", &sig)?;
+            stats.skipped_extension += 1;
             continue;
         }
 
         if f.size < 0 || (f.size as u64) > max_read {
             index::set_file_content_indexed(conn, file_id, "", &sig)?;
+            stats.skipped_oversize += 1;
             continue;
         }
 
@@ -173,16 +193,55 @@ pub fn index_batch_file_contents(
             .unwrap_or_default();
 
         let text = match ext.as_str() {
-            "pdf" => extract_pdf_text(&abs).unwrap_or_default(),
+            "pdf" if disable_pdf_for_batch => {
+                stats.skipped_after_pdf_timeout += 1;
+                String::new()
+            }
+            "pdf" => match extract_pdf_text(&abs) {
+                Ok(text) => text,
+                Err(ExtractError::Timeout) => {
+                    disable_pdf_for_batch = true;
+                    stats.extract_timeouts += 1;
+                    warn!(
+                        target: "vessel_extract",
+                        "pdf extract timeout; skipping remaining pdf extraction for this batch path={}",
+                        abs.display()
+                    );
+                    String::new()
+                }
+                Err(ExtractError::Other(err)) => {
+                    stats.extract_errors += 1;
+                    warn!(
+                        target: "vessel_extract",
+                        "pdf extract error path={} err={err}",
+                        abs.display()
+                    );
+                    String::new()
+                }
+            },
             "txt" | "md" | "log" | "csv" | "json" => {
-                read_plain_text_capped(&abs, max_read).unwrap_or_default()
+                match read_plain_text_capped(&abs, max_read) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        stats.extract_errors += 1;
+                        warn!(
+                            target: "vessel_extract",
+                            "plain text extract error path={} err={err}",
+                            abs.display()
+                        );
+                        String::new()
+                    }
+                }
             }
             _ => String::new(),
         };
+        if !text.is_empty() {
+            stats.extracted_ok += 1;
+        }
 
         index::set_file_content_indexed(conn, file_id, &text, &sig)?;
         thread::yield_now();
     }
 
-    Ok(())
+    Ok(stats)
 }

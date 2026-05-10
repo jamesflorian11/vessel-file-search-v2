@@ -13,6 +13,8 @@ use crate::path_norm;
 use crate::roots;
 use crate::search;
 
+const SEARCH_MAX_OFFSET: i64 = 250_000;
+
 #[cfg(windows)]
 use crate::windows_explorer::{path_string_for_explorer_select, reveal_file_in_explorer};
 
@@ -208,7 +210,13 @@ pub fn search_files(
 ) -> Result<Vec<SearchHit>, String> {
     let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
     let lim = limit.clamp(1, 2000);
-    let off = offset.max(0);
+    let off = offset.clamp(0, SEARCH_MAX_OFFSET);
+    let (from_ns, to_ns) = match (modified_from_ns, modified_to_ns) {
+        (Some(from), Some(to)) if from > to => {
+            return Err("Invalid modified range: 'from' must be <= 'to'.".into());
+        }
+        _ => (modified_from_ns, modified_to_ns),
+    };
     let ext = extension_filter
         .as_deref()
         .map(str::trim)
@@ -219,8 +227,8 @@ pub fn search_files(
         lim,
         off,
         ext,
-        modified_from_ns,
-        modified_to_ns,
+        from_ns,
+        to_ns,
     )
     .map_err(|e| e.to_string())
 }
@@ -241,34 +249,48 @@ fn resolve_existing_file(path: &str) -> Result<PathBuf, String> {
     Ok(canon)
 }
 
+fn ensure_path_within_enabled_roots(path: &Path, state: &AppState) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(|e| e.to_string())?;
+    let roots = roots::list_enabled_root_rows(&conn).map_err(|e| e.to_string())?;
+    if roots.is_empty() {
+        return Err("No enabled roots are configured.".into());
+    }
+    for (_, root_path) in roots {
+        let normalized = path_norm::normalize_root_path(&root_path);
+        let Ok(root_canon) = Path::new(&normalized).canonicalize() else {
+            continue;
+        };
+        if path.starts_with(&root_canon) {
+            return Ok(());
+        }
+    }
+    Err("Path is outside configured enabled roots.".into())
+}
+
 #[tauri::command]
-pub fn open_file(path: String) -> Result<(), String> {
+pub fn open_file(path: String, state: State<'_, AppState>) -> Result<(), String> {
     let pb = resolve_existing_file(&path)?;
+    ensure_path_within_enabled_roots(&pb, &state)?;
     open::that(&pb).map_err(|e| format!("Could not open file: {e}"))
 }
 
 #[tauri::command]
-pub fn reveal_in_explorer(path: String) -> Result<(), String> {
+pub fn reveal_in_explorer(path: String, state: State<'_, AppState>) -> Result<(), String> {
     info!(
         target: "vessel_explorer",
-        "reveal_in_explorer: raw argument from frontend len={} bytes",
+        "reveal_in_explorer: request path_len={} bytes",
         path.len()
     );
-    info!(target: "vessel_explorer", "reveal_in_explorer: raw argument={path:?}");
 
     let pb = resolve_existing_file(&path)?;
-    info!(
-        target: "vessel_explorer",
-        "reveal_in_explorer: canonicalized path={}",
-        pb.display()
-    );
+    ensure_path_within_enabled_roots(&pb, &state)?;
 
     #[cfg(windows)]
     {
         let select_path = path_string_for_explorer_select(&pb);
         info!(
             target: "vessel_explorer",
-            "reveal_in_explorer: using ShellExecuteW select_path={select_path:?}"
+            "reveal_in_explorer: using ShellExecuteW"
         );
 
         match reveal_file_in_explorer(&select_path) {
@@ -284,7 +306,7 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
                 let parent_display = path_string_for_explorer_select(parent);
                 info!(
                     target: "vessel_explorer",
-                    "reveal_in_explorer: fallback open folder path={parent_display:?}"
+                    "reveal_in_explorer: fallback opening parent folder"
                 );
                 open::that(parent_display).map_err(|e2| {
                     format!("Could not reveal in Explorer ({e}); could not open folder: {e2}")

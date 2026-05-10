@@ -1,0 +1,39 @@
+name: pilot-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Svelte check
+        run: npm run check --workspace apps/desktop
+
+      - name: Frontend build
+        run: npm run build --workspace apps/desktop
+
+      - name: Rust check
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --all-targets
+
+      - name: Rust tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test

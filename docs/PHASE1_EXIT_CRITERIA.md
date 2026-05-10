@@ -23,3 +23,13 @@ Use this checklist before treating “core search / access” as complete for V2
 ## Documentation
 
 - [ ] **Limits**: Users know the product indexes **paths** (FTS on path tokens), not full document content, unless/until content indexing ships in a later phase.
+
+## Pilot smoke checklist
+
+- [ ] Start scan from Search and verify status transitions `idle -> scanning -> idle` with no stuck state.
+- [ ] Cancel an in-flight scan and verify no false stale-path deletion from roots that encountered errors/cancel.
+- [ ] Run search in browse mode (empty query), FTS mode (keyword query), and extension filter mode (`pdf`).
+- [ ] Validate guardrails: oversized offset is clamped and invalid modified date range (`from > to`) is rejected.
+- [ ] Verify open/reveal only work for files under enabled roots and reject out-of-scope paths.
+- [ ] Toggle content indexing, rescan, and confirm content search behavior matches latest setting.
+- [ ] Validate upgrade path on existing DB: app opens, migrations complete, and baseline search works.

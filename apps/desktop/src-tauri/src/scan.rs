@@ -1,5 +1,6 @@
 use anyhow::Context;
 use globset::GlobSet;
+use log::warn;
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use walkdir::WalkDir;
@@ -9,6 +10,14 @@ pub struct ScannedFile {
     pub rel_path: String,
     pub size: i64,
     pub mtime_ns: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WalkSummary {
+    pub seen: u64,
+    pub completed: bool,
+    pub walk_errors: u64,
+    pub metadata_errors: u64,
 }
 
 pub fn path_for_glob(p: &Path) -> String {
@@ -22,7 +31,7 @@ pub fn walk_files(
     cancel: &CancellationToken,
     batch_max: usize,
     mut on_batch: impl FnMut(Vec<ScannedFile>) -> anyhow::Result<()>,
-) -> anyhow::Result<u64> {
+) -> anyhow::Result<WalkSummary> {
     let root = root.canonicalize().with_context(|| {
         format!(
             "Path does not exist or is not accessible: {}",
@@ -31,7 +40,10 @@ pub fn walk_files(
     })?;
     let root_norm = path_for_glob(&root);
 
-    let mut seen: u64 = 0;
+    let mut summary = WalkSummary {
+        completed: true,
+        ..WalkSummary::default()
+    };
     let mut batch: Vec<ScannedFile> = Vec::with_capacity(batch_max.min(512));
 
     for entry in WalkDir::new(&root)
@@ -57,11 +69,15 @@ pub fn walk_files(
         })
     {
         if cancel.is_cancelled() {
+            summary.completed = false;
             break;
         }
         let entry = match entry {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(_) => {
+                summary.walk_errors += 1;
+                continue;
+            }
         };
         if !entry.file_type().is_file() {
             continue;
@@ -76,7 +92,10 @@ pub fn walk_files(
 
         let meta = match entry.metadata() {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(_) => {
+                summary.metadata_errors += 1;
+                continue;
+            }
         };
         let size = meta.len() as i64;
         let mtime_ns = meta
@@ -91,20 +110,27 @@ pub fn walk_files(
             size,
             mtime_ns,
         });
-        seen += 1;
+        summary.seen += 1;
 
         if batch.len() >= batch_max {
             let take = std::mem::replace(&mut batch, Vec::with_capacity(batch_max.min(512)));
             on_batch(take)?;
             if cancel.is_cancelled() {
+                summary.completed = false;
                 break;
             }
         }
     }
 
-    if !batch.is_empty() {
+    if !batch.is_empty() && summary.completed {
         on_batch(batch)?;
+    } else if !batch.is_empty() {
+        warn!(
+            target: "vessel_scan",
+            "walk_files: dropping trailing batch due to cancellation pending_count={}",
+            batch.len()
+        );
     }
 
-    Ok(seen)
+    Ok(summary)
 }

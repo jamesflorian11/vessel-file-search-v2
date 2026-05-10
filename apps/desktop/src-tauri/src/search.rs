@@ -124,3 +124,73 @@ pub fn search_paths(
 
     Ok(rows)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_search_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("open sqlite in-memory");
+        conn.execute_batch(
+            "
+            CREATE TABLE roots (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL
+            );
+            CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                root_id INTEGER NOT NULL,
+                rel_path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL
+            );
+            CREATE VIRTUAL TABLE fts_files USING fts5(path, full_path, content, tokenize='unicode61');
+            ",
+        )
+        .expect("create schema");
+        conn.execute("INSERT INTO roots(id, path) VALUES (1, '/tmp/root')", [])
+            .expect("insert root");
+        conn.execute(
+            "INSERT INTO files(id, root_id, rel_path, size, mtime_ns) VALUES (1, 1, 'docs/logbook.txt', 10, 100)",
+            [],
+        )
+        .expect("insert file one");
+        conn.execute(
+            "INSERT INTO files(id, root_id, rel_path, size, mtime_ns) VALUES (2, 1, 'reports/engine.pdf', 20, 200)",
+            [],
+        )
+        .expect("insert file two");
+        conn.execute(
+            "INSERT INTO fts_files(rowid, path, full_path, content) VALUES (1, 'docs/logbook.txt', '/tmp/root/docs/logbook.txt', 'captain daily notes')",
+            [],
+        )
+        .expect("insert fts one");
+        conn.execute(
+            "INSERT INTO fts_files(rowid, path, full_path, content) VALUES (2, 'reports/engine.pdf', '/tmp/root/reports/engine.pdf', 'engine inspection report')",
+            [],
+        )
+        .expect("insert fts two");
+        conn
+    }
+
+    #[test]
+    fn build_fts_query_quotes_and_ands_terms() {
+        let q = build_fts_query("captain report").expect("query should build");
+        assert_eq!(q, "\"captain\" AND \"report\"");
+    }
+
+    #[test]
+    fn extension_like_pattern_handles_dots_and_empty() {
+        assert_eq!(extension_like_pattern(Some(".PDF")), "%.pdf");
+        assert_eq!(extension_like_pattern(Some("  ")), "");
+        assert_eq!(extension_like_pattern(None), "");
+    }
+
+    #[test]
+    fn search_paths_filters_and_orders_browse_mode() {
+        let conn = setup_search_conn();
+        let hits = search_paths(&conn, "", 10, 0, Some("pdf"), None, None).expect("browse search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "reports/engine.pdf");
+    }
+}

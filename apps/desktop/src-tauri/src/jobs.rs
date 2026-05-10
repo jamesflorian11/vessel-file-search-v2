@@ -350,6 +350,12 @@ fn run_scan_job(
     let mut files_seen: u64 = 0;
     let mut files_upserted: u64 = 0;
     let mut files_deleted: u64 = 0;
+    let mut content_extracted_ok: u64 = 0;
+    let mut content_extract_errors: u64 = 0;
+    let mut content_extract_timeouts: u64 = 0;
+    let mut content_skipped_after_timeout: u64 = 0;
+    let mut content_skipped_oversize: u64 = 0;
+    let mut content_skipped_extension: u64 = 0;
     let mut last_emit = Instant::now() - Duration::from_millis(500);
 
     for (ri, (root_id, root_path)) in root_rows.iter().enumerate() {
@@ -366,7 +372,7 @@ fn run_scan_job(
         let mut conn = db::open(db_path)?;
         let mut seen_paths: HashSet<String> = HashSet::new();
 
-        scan::walk_files(
+        let walk_summary = scan::walk_files(
             &root_canon,
             &globs,
             cancel,
@@ -379,13 +385,19 @@ fn run_scan_job(
                     seen_paths.insert(f.rel_path.clone());
                 }
                 let n = index::apply_one_batch(&mut conn, *root_id, &root_abs_str, &batch)?;
-                content_extract::index_batch_file_contents(
+                let extract_stats = content_extract::index_batch_file_contents(
                     &mut conn,
                     &root_canon,
                     *root_id,
                     &batch,
                     &settings,
                 )?;
+                content_extracted_ok += extract_stats.extracted_ok;
+                content_extract_errors += extract_stats.extract_errors;
+                content_extract_timeouts += extract_stats.extract_timeouts;
+                content_skipped_after_timeout += extract_stats.skipped_after_pdf_timeout;
+                content_skipped_oversize += extract_stats.skipped_oversize;
+                content_skipped_extension += extract_stats.skipped_extension;
                 files_upserted += n;
                 files_seen += batch.len() as u64;
 
@@ -409,6 +421,18 @@ fn run_scan_job(
                 Ok(())
             },
         )?;
+        let walk_completed =
+            walk_summary.completed && walk_summary.walk_errors == 0 && walk_summary.metadata_errors == 0;
+        if !walk_completed {
+            info!(
+                target: "vessel_jobs",
+                "scan walk incomplete root_id={} completed={} walk_errors={} metadata_errors={}",
+                root_id,
+                walk_summary.completed,
+                walk_summary.walk_errors,
+                walk_summary.metadata_errors
+            );
+        }
 
         if cancel.is_cancelled() {
             finalize_scan_terminal(app, db_path, mgr, job_id, "cancelled", None, None)?;
@@ -419,7 +443,7 @@ fn run_scan_job(
             &mut conn,
             *root_id,
             &seen_paths,
-            !cancel.is_cancelled(),
+            walk_completed && !cancel.is_cancelled(),
         )?;
         files_deleted += removed;
 
@@ -446,6 +470,16 @@ fn run_scan_job(
         roots_done: roots_total,
         content_indexing_enabled: settings.content_indexing_enabled,
     };
+    info!(
+        target: "vessel_jobs",
+        "scan extraction stats extracted_ok={} errors={} timeouts={} skipped_after_timeout={} skipped_oversize={} skipped_extension={}",
+        content_extracted_ok,
+        content_extract_errors,
+        content_extract_timeouts,
+        content_skipped_after_timeout,
+        content_skipped_oversize,
+        content_skipped_extension
+    );
     emit_progress(app, job_id, &final_p, mgr);
     finalize_scan_terminal(
         app,
